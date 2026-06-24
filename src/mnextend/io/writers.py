@@ -4,6 +4,7 @@
 
 from pathlib import Path
 
+import numpy as np
 from numpy.rec import fromarrays
 from scipy.io import savemat
 
@@ -73,9 +74,65 @@ raw_writers = {
     ".set": [write_set, "EEGLAB"],
 }
 
+
+def write_epochs_set(fname, epochs):
+    """Export epochs to EEGLAB .set file."""
+    data = epochs.get_data() * 1e6  # (n_epochs, n_channels, n_times), convert to µV
+    data = data.transpose(1, 2, 0)  # EEGLAB expects (n_channels, n_times, n_epochs)
+
+    n_epochs = len(epochs)
+    n_times = len(epochs.times)
+    fs = epochs.info["sfreq"]
+
+    chanlocs = fromarrays([epochs.ch_names], names=["labels"])
+
+    id_to_name = {v: k for k, v in epochs.event_id.items()}
+    event_types = np.array(
+        [id_to_name.get(eid, str(eid)) for eid in epochs.events[:, 2]]
+    )
+    # latency in samples (1-based) within the concatenated epoch data
+    offset = round(abs(epochs.tmin) * fs)
+    latencies = (np.arange(n_epochs) * n_times + offset + 1).astype(float)
+    epoch_indices = np.arange(1, n_epochs + 1, dtype=float)
+
+    events = fromarrays(
+        [event_types, latencies, np.zeros(n_epochs), epoch_indices],
+        names=["type", "latency", "duration", "epoch"],
+    )
+    # per-epoch struct: eventlatency in ms (0 = time-locking event)
+    epoch_struct = fromarrays(
+        [epoch_indices, event_types, np.zeros(n_epochs), np.zeros(n_epochs)],
+        names=["event", "eventtype", "eventlatency", "eventduration"],
+    )
+
+    savemat(
+        fname,
+        {
+            "EEG": {
+                "data": data,
+                "setname": str(fname),
+                "nbchan": data.shape[0],
+                "pnts": n_times,
+                "trials": n_epochs,
+                "srate": fs,
+                "xmin": epochs.tmin,
+                "xmax": epochs.tmax,
+                "chanlocs": chanlocs,
+                "event": events,
+                "epoch": epoch_struct,
+                "icawinv": [],
+                "icasphere": [],
+                "icaweights": [],
+            }
+        },
+        appendmat=False,
+    )
+
+
 epochs_writers = {
     ".fif": [write_fif, "Elekta Neuromag"],
     ".fif.gz": [write_fif, "Elekta Neuromag"],
+    ".set": [write_epochs_set, "EEGLAB"],
 }
 
 
