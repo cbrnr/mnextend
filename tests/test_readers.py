@@ -78,12 +78,12 @@ def test_split_name_ext_path_object():
 
 def test_read_passes_positional_args(mock_readers):
     _read("recording.fif", mock_readers, "arg1", "arg2")
-    mock_readers[".fif"].assert_called_once_with("recording.fif", "arg1", "arg2")
+    mock_readers[".fif"].assert_called_once_with(Path("recording.fif"), "arg1", "arg2")
 
 
 def test_read_passes_kwargs(mock_readers):
     _read("recording.fif", mock_readers, preload=True)
-    mock_readers[".fif"].assert_called_once_with("recording.fif", preload=True)
+    mock_readers[".fif"].assert_called_once_with(Path("recording.fif"), preload=True)
 
 
 def test_read_returns_reader_result(mock_readers):
