@@ -12,7 +12,7 @@ MNEXTEND provides readers for the following file formats that are not natively s
 - [MAT](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) (MATLAB)
 - [NPY](https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html) (NumPy)
 
-In addition, MNEXTEND adds readers from third-party packages to provide a unified interface via `read_raw()` and `read_epochs()`:
+In addition, MNEXTEND adds the following readers from third-party packages:
 
 - [BVRF](https://www.brainproducts.com/support-resources/brainvision-recording-format/) (via [PyBVRF](https://github.com/cbrnr/pybvrf))
 
