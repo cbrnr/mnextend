@@ -34,7 +34,7 @@ def write_set(fname, raw):
         {
             "EEG": {
                 "data": data,
-                "setname": fname,
+                "setname": str(fname),
                 "nbchan": data.shape[0],
                 "pnts": data.shape[1],
                 "trials": 1,

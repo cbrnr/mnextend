@@ -15,8 +15,8 @@ from mnextend.io.readers import (
     raw_readers,
     read_epochs,
     read_raw,
-    split_name_ext,
 )
+from mnextend.io.utils import split_name_ext
 
 
 @pytest.fixture()

@@ -64,6 +64,9 @@ class RawXDF(BaseRaw):
           the original timestamps are regular and does not account for any gaps.
         By default, gap detection is disabled.
         """
+        if len(stream_ids) == 0:
+            raise ValueError("Argument `stream_ids` must not be empty.")
+
         if len(stream_ids) > 1 and fs_new is None:
             raise ValueError(
                 "Argument `fs_new` is required when reading multiple streams."
@@ -139,6 +142,8 @@ class RawXDF(BaseRaw):
                     )
                     col_start += n_chans
         else:  # only possible if a single stream was selected
+            if len(streams[stream_ids[0]]["time_stamps"]) == 0:
+                raise ValueError(f"Stream {stream_ids[0]} contains no samples.")
             data = streams[stream_ids[0]]["time_series"]
             first_time = streams[stream_ids[0]]["time_stamps"][0]
             fs = float(
@@ -177,8 +182,14 @@ class RawXDF(BaseRaw):
 
         recording_datetime = header["info"].get("datetime", [None])[0]
         if recording_datetime is not None:
-            recording_datetime = recording_datetime[:-2] + ":" + recording_datetime[-2:]
-            meas_date = datetime.fromisoformat(recording_datetime)
+            try:
+                meas_date = datetime.fromisoformat(recording_datetime)
+            except ValueError:
+                # LabRecorder emits timezone offsets as +HHMM without the colon
+                recording_datetime = (
+                    recording_datetime[:-2] + ":" + recording_datetime[-2:]
+                )
+                meas_date = datetime.fromisoformat(recording_datetime)
             self.set_meas_date(meas_date.astimezone(UTC))
 
 
@@ -250,6 +261,8 @@ def _resample_streams(streams, stream_ids, fs_new, use_interpolation=False):
     end_times = []
     n_total_chans = 0
     for stream_id in stream_ids:
+        if len(streams[stream_id]["time_stamps"]) == 0:
+            raise ValueError(f"Stream {stream_id} contains no samples.")
         start_times.append(streams[stream_id]["time_stamps"][0])
         end_times.append(streams[stream_id]["time_stamps"][-1])
         n_total_chans += int(streams[stream_id]["info"]["channel_count"][0])
@@ -278,7 +291,7 @@ def _resample_streams(streams, stream_ids, fs_new, use_interpolation=False):
 
         start_time = timestamps[0]
         end_time = timestamps[-1]
-        x_old = streams[stream_id]["time_series"][sort_indices, :][unique_idx, :]
+        x_old = streams[stream_id]["time_series"][sort_indices[unique_idx], :]
 
         # apply anti-aliasing filter if downsampling
         fs_original = float(

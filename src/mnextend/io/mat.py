@@ -4,6 +4,7 @@
 
 import re
 
+import numpy as np
 from mne import create_info
 from mne.io import BaseRaw
 from numpy import atleast_2d
@@ -80,7 +81,13 @@ def _get_dict_value(d, keys):
     value = d
     for key in keys:
         if match := re.search(r"\[(\d+)\]", key):  # list element
-            value = value[int(match.group(1))]
+            idx = int(match.group(1))
+            if not isinstance(value, (list, np.ndarray)):
+                raise ValueError(
+                    f"Expected a list or array at '{key}', got {type(value).__name__}."
+                    " Use a plain name (without brackets) to access a struct field."
+                )
+            value = value[idx]
         else:  # dict element
             value = value[key]
     return value

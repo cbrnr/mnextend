@@ -50,7 +50,6 @@ epochs_readers = {
 }
 
 
-
 def _read(fname, readers, *args, **kwargs):
     """Read file using appropriate reader based on file extension."""
     _, ext = split_name_ext(fname, readers)

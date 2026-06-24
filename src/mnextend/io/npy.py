@@ -66,6 +66,11 @@ def parse_npy(fname):
         The shape of the array.
     """
     with open(fname, "rb") as f:
-        np.lib.format.read_magic(f)
-        shape, _, _ = np.lib.format.read_array_header_1_0(f)
+        major, _ = np.lib.format.read_magic(f)
+        read_header = (
+            np.lib.format.read_array_header_2_0
+            if major == 2
+            else np.lib.format.read_array_header_1_0
+        )
+        shape, _, _ = read_header(f)
     return shape
