@@ -11,7 +11,7 @@ import mne
 import numpy as np
 import scipy.signal
 from mne.io import BaseRaw, get_channel_type_constants
-from pyxdf import load_xdf
+from pyxdf import load_xdf, resolve_streams
 from pyxdf.pyxdf import _read_varlen_int, open_xdf
 
 
@@ -33,11 +33,11 @@ class RawXDF(BaseRaw):
 
         Parameters
         ----------
-        fname : str
+        fname : str | Path
             File name to load.
-        stream_ids : list[int]
-            IDs of streams to load. A list of available streams can be obtained with
-            `pyxdf.resolve_streams(fname)`.
+        stream_ids : int | list[int]
+            ID(s) of streams to load. Use `pyxdf.resolve_streams(fname)` to list
+            available streams.
         marker_ids : list[int] | None
             IDs of marker streams to load. If `None`, load all marker streams. A marker
             stream is a stream with a nominal sampling frequency of 0 Hz.
@@ -331,7 +331,7 @@ def _resample_streams(streams, stream_ids, fs_new, use_interpolation=False):
 
 def read_raw_xdf(
     fname,
-    stream_ids,
+    stream_ids=None,
     marker_ids=None,
     prefix_markers=False,
     fs_new=None,
@@ -344,9 +344,10 @@ def read_raw_xdf(
     ----------
     fname : str
         File name to load.
-    stream_ids : list[int]
-        IDs of streams to load. A list of available streams can be obtained with
-        `pyxdf.resolve_streams(fname)`.
+    stream_ids : int | list[int] | None
+        ID(s) of streams to load. If `None`, raises a `ValueError` listing the available
+        regular stream IDs. Use `pyxdf.resolve_streams(fname)` to list available
+        streams.
     marker_ids : list[int] | None
         IDs of marker streams to load. If `None`, load all marker streams. A marker
         stream is a stream with a nominal sampling frequency of 0 Hz.
@@ -367,6 +368,16 @@ def read_raw_xdf(
     RawXDF
         The raw data.
     """
+    if isinstance(stream_ids, int):
+        stream_ids = [stream_ids]
+    if stream_ids is None:
+        streams = resolve_streams(fname)
+        ids = [s["stream_id"] for s in streams if s["channel_format"] != "string"]
+        msg = (
+            "Argument `stream_ids` is required (available regular stream IDs: "
+            f"{', '.join(map(str, ids))})."
+        )
+        raise ValueError(msg)
     return RawXDF(
         fname,
         stream_ids,
