@@ -47,6 +47,7 @@ raw_readers = {
 epochs_readers = {
     ".fif": mne.read_epochs,
     ".fif.gz": mne.read_epochs,
+    ".set": mne.read_epochs_eeglab,
 }
 
 
