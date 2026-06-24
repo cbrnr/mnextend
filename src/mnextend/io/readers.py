@@ -10,6 +10,7 @@ from pybvrf import read_raw_bvrf
 
 from mnextend.io.mat import read_raw_mat
 from mnextend.io.npy import read_raw_npy
+from mnextend.io.utils import split_name_ext
 from mnextend.io.xdf import read_raw_xdf
 
 
@@ -48,16 +49,6 @@ epochs_readers = {
     ".fif.gz": mne.read_epochs,
 }
 
-
-def split_name_ext(fname, readers):
-    """Return name and supported file extension."""
-    maxsuffixes = max(ext.count(".") for ext in readers)
-    suffixes = Path(fname).suffixes
-    for n in range(maxsuffixes, 0, -1):
-        ext = "".join(suffixes[-n:]).lower()
-        if ext in readers:
-            return Path(fname).name[: -len(ext)], ext
-    return Path(fname).name, None
 
 
 def _read(fname, readers, *args, **kwargs):

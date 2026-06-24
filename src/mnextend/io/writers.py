@@ -7,6 +7,8 @@ from pathlib import Path
 from numpy.rec import fromarrays
 from scipy.io import savemat
 
+from mnextend.io.utils import split_name_ext
+
 
 def write_fif(fname, raw):
     raw.save(fname, overwrite=True)
@@ -60,25 +62,37 @@ def write_bv(fname, raw):
     raw.export(fname=Path(fname).with_suffix(".vhdr"), overwrite=True)
 
 
-# this dict contains each supported file extension as a key; the corresponding value is
-# a list with three elements: (1) the writer function, (2) the full file format name,
-# and (3) a (comma-separated) string indicating the supported objects
-writers = {
-    ".bdf": [write_bdf_edf, "Biosemi Data Format", "raw"],
-    ".edf": [write_bdf_edf, "European Data Format", "raw"],
-    ".eeg": [write_bv, "BrainVision", "raw"],
-    ".fif": [write_fif, "Elekta Neuromag", "raw,epoch"],
-    ".fif.gz": [write_fif, "Elekta Neuromag", "raw,epoch"],
-    ".set": [write_set, "EEGLAB", "raw"],
+# These dicts contain each supported file extension as a key; the corresponding value is
+# a list with two elements: (1) the writer function and (2) the full file format name.
+raw_writers = {
+    ".bdf": [write_bdf_edf, "Biosemi Data Format"],
+    ".edf": [write_bdf_edf, "European Data Format"],
+    ".eeg": [write_bv, "BrainVision"],
+    ".fif": [write_fif, "Elekta Neuromag"],
+    ".fif.gz": [write_fif, "Elekta Neuromag"],
+    ".set": [write_set, "EEGLAB"],
+}
+
+epochs_writers = {
+    ".fif": [write_fif, "Elekta Neuromag"],
+    ".fif.gz": [write_fif, "Elekta Neuromag"],
 }
 
 
+def _write(fname, data, writer_dict):
+    """Write data using appropriate writer based on file extension."""
+    _, ext = split_name_ext(fname, writer_dict)
+    if ext is not None:
+        return writer_dict[ext][0](fname, data)
+    ext = "".join(Path(fname).suffixes).lower()
+    raise ValueError(
+        f"Unsupported file type ({ext})." if ext else "Unsupported file type."
+    )
+
+
 def write_raw(fname, raw):
-    maxsuffixes = max([ext.count(".") for ext in writers.keys()])
-    suffixes = Path(fname).suffixes
-    for i in range(-maxsuffixes, 0):
-        ext = "".join(suffixes[i:])
-        if ext in writers.keys():
-            return writers[ext][0](fname, raw)
-    else:
-        raise ValueError(f"Unknown file type '{suffixes}'.")
+    return _write(fname, raw, raw_writers)
+
+
+def write_epochs(fname, epochs):
+    return _write(fname, epochs, epochs_writers)
