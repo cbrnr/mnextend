@@ -13,77 +13,70 @@ from mnextend.io.npy import read_raw_npy
 from mnextend.io.xdf import read_raw_xdf
 
 
-class UnsupportedFileTypeError(ValueError):
-    pass
-
-
-def _read_unsupported(fname, **kwargs):
+def _read_unsupported(fname, *, suggest=None, **kwargs):
     ext = "".join(Path(fname).suffixes)
     msg = f"Unsupported file type ({ext})."
-    suggest = kwargs.get("suggest")
     if suggest is not None:
         msg += f" Try reading a {suggest} file instead."
     raise ValueError(msg)
 
 
-# supported read file formats for raw (continuous) data
-supported = {
+# known file formats for raw (continuous) data
+raw_readers = {
     ".edf": mne.io.read_raw_edf,
     ".bdf": mne.io.read_raw_bdf,
     ".gdf": mne.io.read_raw_gdf,
     ".vhdr": mne.io.read_raw_brainvision,
     ".fif": mne.io.read_raw_fif,
-    ".fif.gz": mne.io.read_raw_fif,
     ".set": mne.io.read_raw_eeglab,
     ".cnt": mne.io.read_raw_cnt,
     ".mff": mne.io.read_raw_egi,
     ".nxe": mne.io.read_raw_eximia,
     ".hdr": mne.io.read_raw_nirx,
     ".snirf": mne.io.read_raw_snirf,
-    ".xdf": read_raw_xdf,
-    ".xdfz": read_raw_xdf,
-    ".xdf.gz": read_raw_xdf,
     ".mat": read_raw_mat,
     ".npy": read_raw_npy,
-    ".bvrh": read_raw_bvrf,
-    ".bvrd": read_raw_bvrf,
-    ".bvrm": read_raw_bvrf,
-    ".bvri": read_raw_bvrf,
+    **dict.fromkeys([".fif.gz"], mne.io.read_raw_fif),
+    **dict.fromkeys([".xdf", ".xdfz", ".xdf.gz"], read_raw_xdf),
+    **dict.fromkeys([".bvrh", ".bvrd", ".bvrm", ".bvri"], read_raw_bvrf),
+    **dict.fromkeys([".vmrk", ".eeg"], partial(_read_unsupported, suggest=".vhdr")),
 }
 
-# supported read file formats for epochs
-epoch_readers = {
+# known file formats for epochs (segmented) data
+epochs_readers = {
     ".fif": mne.read_epochs,
     ".fif.gz": mne.read_epochs,
 }
 
-# known but unsupported file formats
-suggested = {
-    ".vmrk": partial(_read_unsupported, suggest=".vhdr"),
-    ".eeg": partial(_read_unsupported, suggest=".vhdr"),
-}
 
-# all known file formats
-readers = {**supported, **suggested}
-
-
-def split_name_ext(fname):
+def split_name_ext(fname, readers):
     """Return name and supported file extension."""
-    maxsuffixes = max([ext.count(".") for ext in supported])
+    maxsuffixes = max(ext.count(".") for ext in readers)
     suffixes = Path(fname).suffixes
-    for i in range(-maxsuffixes, 0):
-        ext = "".join(suffixes[i:]).lower()
-        if ext in readers.keys():
+    for n in range(maxsuffixes, 0, -1):
+        ext = "".join(suffixes[-n:]).lower()
+        if ext in readers:
             return Path(fname).name[: -len(ext)], ext
-    return fname, None  # unknown file extension
+    return Path(fname).name, None
+
+
+def _read(fname, readers, *args, **kwargs):
+    """Read file using appropriate reader based on file extension."""
+    _, ext = split_name_ext(fname, readers)
+    if ext is not None:
+        return readers[ext](fname, *args, **kwargs)
+    ext = "".join(Path(fname).suffixes).lower()
+    raise ValueError(
+        f"Unsupported file type ({ext})." if ext else "Unsupported file type."
+    )
 
 
 def read_raw(fname, *args, **kwargs):
-    """Read raw file.
+    """Read raw (continuous) data file.
 
     Parameters
     ----------
-    fname : str
+    fname : str | Path
         File name to load.
 
     Returns
@@ -93,24 +86,19 @@ def read_raw(fname, *args, **kwargs):
 
     Notes
     -----
-    This function supports reading different file formats. It uses the readers dict to
-    dispatch the appropriate read function for a supported file type.
+    This function supports reading raw data from different file formats. It uses the
+    `raw_readers` dict to dispatch the appropriate read function for a supported file
+    type.
     """
-    _, ext = split_name_ext(fname)
-    if ext is not None:
-        return readers[ext](fname, *args, **kwargs)
-    else:
-        ext = "".join(Path(fname).suffixes)
-        msg = f"Unsupported file type ({ext})." if ext else "Unsupported file type."
-        raise UnsupportedFileTypeError(msg)
+    return _read(fname, raw_readers, *args, **kwargs)
 
 
 def read_epochs(fname, *args, **kwargs):
-    """Read epochs file.
+    """Read epochs (segmented) data file.
 
     Parameters
     ----------
-    fname : str
+    fname : str | Path
         File name to load.
 
     Returns
@@ -120,14 +108,8 @@ def read_epochs(fname, *args, **kwargs):
 
     Notes
     -----
-    This function supports reading epochs from different file formats. It uses the
-    `epoch_readers` dict to dispatch the appropriate read function for a supported file
+    This function supports reading epochs data from different file formats. It uses the
+    `epochs_readers` dict to dispatch the appropriate read function for a supported file
     type.
     """
-    _, ext = split_name_ext(fname)
-    if ext is not None and ext in epoch_readers:
-        return epoch_readers[ext](fname, *args, **kwargs)
-    else:
-        ext = "".join(Path(fname).suffixes)
-        msg = f"Unsupported file type ({ext})." if ext else "Unsupported file type."
-        raise UnsupportedFileTypeError(msg)
+    return _read(fname, epochs_readers, *args, **kwargs)

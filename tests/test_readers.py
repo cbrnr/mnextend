@@ -4,10 +4,10 @@
 
 import pytest
 
-from mnextend.io.readers import split_name_ext, supported
+from mnextend.io.readers import split_name_ext, _raw_supported
 
 
-@pytest.mark.parametrize("ext", supported.keys())
+@pytest.mark.parametrize("ext", _raw_supported.keys())
 def test_split_name_ext(ext):
     fname = f"test{ext}"
     assert split_name_ext(fname) == ("test", ext)
