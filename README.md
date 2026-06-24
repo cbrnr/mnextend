@@ -1,4 +1,4 @@
-# MNEXTEND
+# MNExtend
 
 This package provides additional functionality for working with [MNE-Python](https://mne.tools/), the most popular Python package for processing electrophysiological data (EEG, MEG, ...).
 
@@ -6,13 +6,13 @@ This package provides additional functionality for working with [MNE-Python](htt
 
 ### Reading additional file formats
 
-MNEXTEND provides readers for the following file formats that are not natively supported by MNE-Python:
+MNExtend provides readers for the following file formats that are not natively supported by MNE-Python:
 
 - [XDF](https://github.com/sccn/xdf/wiki/Specifications) (Extensible Data Format)
 - [MAT](https://www.mathworks.com/help/matlab/import_export/mat-file-versions.html) (MATLAB)
 - [NPY](https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html) (NumPy)
 
-In addition, MNEXTEND adds the following readers from third-party packages:
+In addition, MNExtend adds the following readers from third-party packages:
 
 - [BVRF](https://www.brainproducts.com/support-resources/brainvision-recording-format/) (via [PyBVRF](https://github.com/cbrnr/pybvrf))
 
