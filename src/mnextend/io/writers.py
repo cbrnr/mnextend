@@ -81,6 +81,7 @@ epochs_writers = {
 
 def _write(fname, data, writer_dict):
     """Write data using appropriate writer based on file extension."""
+    fname = Path(fname).expanduser()
     _, ext = split_name_ext(fname, writer_dict)
     if ext is not None:
         return writer_dict[ext][0](fname, data)
