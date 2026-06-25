@@ -1,4 +1,6 @@
 ## [UNRELEASED] · YYYY-MM-DD
+### ✨ Added
+- Add `run_iclabel()` for automatic ICA component classification using the ICLabel algorithm
 
 ## [0.1.0] · 2026-06-24
 ### ✨ Added
