@@ -1,6 +1,6 @@
 ## [UNRELEASED] · YYYY-MM-DD
 ### ✨ Added
-- Add `run_iclabel()` for automatic ICA component classification using the ICLabel algorithm
+- Add `run_iclabel()` for automatic ICA component classification using the ICLabel algorithm ([#4](https://github.com/cbrnr/mnextend/pull/4) by [Clemens Brunner](https://github.com/cbrnr))
 
 ## [0.1.0] · 2026-06-24
 ### ✨ Added
