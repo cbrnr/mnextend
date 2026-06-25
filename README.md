@@ -34,3 +34,15 @@ from mnextend import write_raw
 
 write_raw("my_data-raw.fif.gz", raw)
 ```
+
+### ICLabel classification
+
+MNExtend includes [ICLabel](https://labeling.ucsd.edu/tutorial/overview), a pre-trained classifier that labels ICA components as one of seven types: brain, muscle, eye, heart, line noise, channel noise, or other. In contrast to [MNE-ICALabel](https://mne.tools/mne-icalabel/stable/index.html), the classifier is implemented in pure NumPy and does not depend on [ONNX Runtime](https://onnxruntime.ai).
+
+`run_iclabel()` takes a fitted `ICA` object and the corresponding `Raw` or `Epochs` instance (which must have a montage set), and returns an array of class probabilities:
+
+```python
+from mnextend import run_iclabel
+
+probs = run_iclabel(raw, ica)
+```
