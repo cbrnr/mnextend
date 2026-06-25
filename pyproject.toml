@@ -23,6 +23,7 @@ classifiers = [
 keywords = ["EEG", "MEG", "MNE-Python", "XDF", "electrophysiology"]
 dependencies = [
     "edfio>=0.4.13",
+    "matplotlib>=3.8",
     "mne>=1.12.1",
     "numpy>=2.2.6",
     "onnx>=1.21.0",

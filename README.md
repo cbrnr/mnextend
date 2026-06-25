@@ -42,7 +42,8 @@ MNExtend includes [ICLabel](https://labeling.ucsd.edu/tutorial/overview), a pre-
 `run_iclabel()` takes a fitted `ICA` object and the corresponding `Raw` or `Epochs` instance (which must have a montage set), and returns an array of class probabilities:
 
 ```python
-from mnextend import run_iclabel
+from mnextend import plot_ica_components, run_iclabel
 
 probs = run_iclabel(raw, ica)
+figs = plot_ica_components(raw, ica, probs)
 ```

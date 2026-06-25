@@ -10,10 +10,14 @@ on the `mne-icalabel` package (https://github.com/mne-tools/mne-icalabel).
 
 from pathlib import Path
 
+import matplotlib.gridspec as gridspec
 import numpy as np
 import onnx
 from mne import BaseEpochs
+from mne.io import BaseRaw, RawArray
 from scipy.signal import resample_poly
+
+IC_LABELS = ["brain", "muscle", "eye", "heart", "line_noise", "channel_noise", "other"]
 
 
 def _get_topomaps(inst, icawinv, picks):
@@ -679,3 +683,110 @@ def run_iclabel(inst, ica):
     probs = _iclabel_forward_numpy(images, psd, autocorrelation, weights)
 
     return probs
+
+
+def plot_ica_components(inst, ica, probs, picks=None, show=True, **kwargs):
+    """Plot ICA component properties with ICLabel classification probabilities.
+
+    Wraps `ICA.plot_properties` and adds a bar chart of the seven ICLabel class
+    probabilities below the topographic map for each component.
+
+    Parameters
+    ----------
+    inst : instance of Raw | Epochs
+        The data instance.
+    ica : ICA
+        The fitted ICA instance.
+    probs : np.ndarray, shape (n_components, 7)
+        ICLabel class probabilities as returned by `run_iclabel`. Columns correspond
+        to: brain, muscle, eye, heart, line noise, channel noise, other.
+    picks : int | list of int | None
+        Indices of components to plot. If `None`, all components are plotted.
+    show : bool
+        Whether to show the figures immediately.
+    **kwargs
+        Additional keyword arguments forwarded to `ICA.plot_properties` (e.g., `dB`,
+        `plot_std`, `topomap_args`, `psd_args`, `figsize`, `reject`).
+
+    Returns
+    -------
+    list of Figure
+        One `matplotlib.figure.Figure` per component.
+    """
+    if picks is None:
+        picks = list(range(ica.n_components_))
+    elif isinstance(picks, int):
+        picks = [picks]
+
+    bar_labels = [label.replace("_", "\n") for label in IC_LABELS]
+
+    figs = []
+    for comp_id in picks:
+        if isinstance(inst, BaseRaw):
+            try:
+                (fig,) = ica.plot_properties(inst, picks=comp_id, show=False, **kwargs)
+            except RuntimeError:
+                good_data = inst.get_data(reject_by_annotation="omit")
+                inst_plot = (
+                    RawArray(good_data, inst.info.copy(), verbose=False)
+                    if good_data.shape[1] >= int(2 * inst.info["sfreq"])
+                    else inst
+                )
+                (fig,) = ica.plot_properties(
+                    inst_plot,
+                    picks=comp_id,
+                    show=False,
+                    reject_by_annotation=False,
+                    **{k: v for k, v in kwargs.items() if k != "reject_by_annotation"},
+                )
+        else:
+            (fig,) = ica.plot_properties(inst, picks=comp_id, show=False, **kwargs)
+
+        w, h = fig.get_size_inches()
+        fig.set_size_inches(w, h + 0.5)
+
+        gs = gridspec.GridSpec(3, 2, figure=fig, height_ratios=[1, 0.3, 1])
+        gs_left = gridspec.GridSpecFromSubplotSpec(
+            2, 1, subplot_spec=gs[:2, 0], hspace=0.2, height_ratios=[3.75, 1]
+        )
+        gs_right = gridspec.GridSpecFromSubplotSpec(
+            2, 1, subplot_spec=gs[:2, 1], hspace=0, height_ratios=[3.5, 1]
+        )
+
+        fig.axes[0].set_subplotspec(gs_left[0])
+        fig.axes[1].set_subplotspec(gs_right[0])
+        fig.axes[2].set_subplotspec(gs_right[1])
+        fig.axes[3].set_subplotspec(gs[2, 0])
+        fig.axes[4].set_subplotspec(gs[2, 1])
+
+        ic_probs = probs[comp_id]
+        ax = fig.add_subplot(gs_left[1])
+
+        colors = ["#4c72b0"] * len(bar_labels)
+        colors[np.argmax(ic_probs)] = "#228B22"
+
+        x_pos = range(len(bar_labels))
+        ax.bar(x_pos, ic_probs, color=colors)
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(bar_labels, ha="center", fontsize=7)
+        ax.tick_params(axis="x", which="both", length=0)
+        ax.set_ylim(0, 1.1)
+        ax.set_yticks([])
+        ax.set_facecolor("none")
+
+        for spine_name, spine in ax.spines.items():
+            if spine_name != "bottom":
+                spine.set_visible(False)
+
+        for i, v in enumerate(ic_probs):
+            ax.text(i, v + 0.03, f"{v:.2f}", ha="center", fontsize=8)
+
+        fig.align_ylabels([ax, fig.axes[3]])
+        fig.tight_layout()
+
+        if show:
+            fig.show()
+
+        figs.append(fig)
+
+    return figs
