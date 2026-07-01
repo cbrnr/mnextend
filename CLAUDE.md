@@ -15,7 +15,6 @@ Guidelines for AI coding agents working on this repository.
   uv run ruff check --fix
   uv run ruff format
   ```
-  The first command auto-fixes everything Ruff considers safe across the full lint rule set (`C4`, `E`, `F`, `I`, `PERF`, `UP`, `W` from `pyproject.toml`) and reports anything it can't fix automatically; the second formats the code. Together these match what CI checks (`ruff check` and `ruff format --diff`).
 - Line length is 88 characters (the default). This limit applies to all code, including docstrings.
 - Docstrings follow [NumPy style](https://numpydoc.readthedocs.io/en/latest/format.html), but use standard Markdown syntax instead of reStructuredText and a line length of 88 characters. In particular, inline code formatting uses single backticks (`` `x` ``), not double backticks (` ``x`` `) like in reStructuredText.
 - Inline comments should start with a lower-case letter and be a single sentence where possible.
