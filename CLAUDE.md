@@ -6,15 +6,16 @@ Guidelines for AI coding agents working on this repository.
 
 - This project uses [uv](https://docs.astral.sh/uv/) for package and environment management.
 - Install dependencies with `uv sync`.
-- Run tests with `uv run pytest`.
+- Run tests with `uv run pytest -W error tests` (CI turns warnings into errors, so match this locally to catch the same failures).
 
 ## Code style
 
-- Formatting is enforced by [Ruff](https://docs.astral.sh/ruff/). Run both of the following before committing:
+- Formatting and linting are enforced by [Ruff](https://docs.astral.sh/ruff/). Run both of the following before committing:
   ```
-  uv run ruff check --select I --fix
+  uv run ruff check --fix
   uv run ruff format
   ```
+  The first command auto-fixes everything Ruff considers safe across the full lint rule set (`C4`, `E`, `F`, `I`, `PERF`, `UP`, `W` from `pyproject.toml`) and reports anything it can't fix automatically; the second formats the code. Together these match what CI checks (`ruff check` and `ruff format --diff`).
 - Line length is 88 characters (the default). This limit applies to all code, including docstrings.
 - Docstrings follow [NumPy style](https://numpydoc.readthedocs.io/en/latest/format.html), but use standard Markdown syntax instead of reStructuredText and a line length of 88 characters. In particular, inline code formatting uses single backticks (`` `x` ``), not double backticks (` ``x`` `) like in reStructuredText.
 - Inline comments should start with a lower-case letter and be a single sentence where possible.
