@@ -1,3 +1,5 @@
+## [UNRELEASED] · YYYY-MM-DD
+
 ## [0.2.1] · 2026-07-02
 ### ✨ Added
 - Add `__version__` attribute to the package ([#5](https://github.com/cbrnr/mnextend/pull/5) by [Clemens Brunner](https://github.com/cbrnr))
