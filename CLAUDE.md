@@ -34,14 +34,12 @@ Every PR must include an entry in the `[UNRELEASED]` section of [CHANGELOG.md](C
 
 ## Release
 
-1. Remove the `.dev0` suffix from the `version` field in `pyproject.toml` (and/or adapt the version to be released if necessary).
-2. Update the section in `CHANGELOG.md` corresponding to the new release with the version and current date.
-3. Commit these changes and push.
-4. Create a new release on GitHub and use the version as the tag name (make sure to prepend the version with a `v`, e.g. `v0.7.0`).
-5. A GitHub Action takes care of building and uploading wheels to PyPI.
+1. Run `uv run tools/release.py prepare X.Y.Z` (with the version to be released). This removes the `.dev0` suffix from the `version` field in `pyproject.toml`, dates the `## [UNRELEASED]` heading in `CHANGELOG.md` with the version and today's date, and runs `uv lock`.
+2. Review the resulting changes, then commit and push them.
+3. Create a new release on GitHub and use the version as the tag name (make sure to prepend the version with a `v`, e.g. `v0.7.0`). Use `uv run tools/release.py notes X.Y.Z` to print the CHANGELOG entries for the release notes.
+4. A GitHub Action takes care of building and uploading wheels to PyPI.
 
 This concludes the new release. Now prepare the source for the next planned release as follows:
 
-1. Update the `version` field in `pyproject.toml` to the next planned release and append `.dev0`.
-2. Start a new section at the top of `CHANGELOG.md` titled `## [UNRELEASED] · YYYY-MM-DD`.
-3. Commit ("Prepare next dev version") and push.
+1. Run `uv run tools/release.py bump X.Y.Z` (with the next planned version). This sets the `version` field to `X.Y.Z.dev0`, starts a fresh `## [UNRELEASED] · YYYY-MM-DD` section at the top of `CHANGELOG.md`, and runs `uv lock`.
+2. Commit ("Prepare next dev version") and push.
