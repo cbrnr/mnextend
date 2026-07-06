@@ -1,4 +1,4 @@
-## [UNRELEASED] · YYYY-MM-DD
+## [0.2.2] · 2026-07-06
 ### ✨ Added
 - Expose `resolve_streams()` (via `mnextend.io.xdf`) and `read_bvrf_header()` (via `mnextend.io.bvrf`) so downstream packages can inspect XDF/BVRF files before reading them ([#7](https://github.com/cbrnr/mnextend/pull/7) by [Clemens Brunner](https://github.com/cbrnr))
 
