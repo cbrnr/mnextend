@@ -25,6 +25,18 @@ raw = read_raw("my_data-raw.xdf", stream_ids=[1, 2, 3])
 epochs = read_epochs("my_data-epochs.fif.gz")
 ```
 
+### Inspecting files before reading
+
+Some formats require inspecting file contents before calling `read_raw()`, e.g. to let a user pick which stream(s) or participant(s) to load:
+
+```python
+from mnextend.io.bvrf import read_bvrf_header
+from mnextend.io.xdf import resolve_streams
+
+streams = resolve_streams("my_data.xdf")
+header = read_bvrf_header("my_data.bvrh")
+```
+
 ### Writing raw data
 
 Writing raw data is supported via `write_raw()`, which does not implement any new file formats, but provides a unified interface for writing raw data to the file formats that are natively supported by MNE-Python:
