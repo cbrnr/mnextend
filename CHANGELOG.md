@@ -1,4 +1,6 @@
 ## [UNRELEASED] · YYYY-MM-DD
+### ✨ Added
+- Add fast line-noise removal using fitted sinusoids ([#8](https://github.com/cbrnr/mnextend/pull/8) by [Clemens Brunner](https://github.com/cbrnr))
 
 ## [0.2.2] · 2026-07-06
 ### ✨ Added

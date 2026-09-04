@@ -59,3 +59,21 @@ from mnextend import plot_ica_components, run_iclabel
 probs = run_iclabel(raw, ica)
 figs = plot_ica_components(raw, ica, probs)
 ```
+
+### Adaptive line-noise removal
+
+Inspired by `Raw.notch_filter(method="spectrum_fit")` in MNE-Python, this implementation removes known line frequencies from a preloaded `Raw` object much faster (roughly 50× in our tests). It fits sinusoids in overlapping windows, accommodating gradual amplitude and phase changes without suppressing nearby frequencies.
+
+```python
+from mnextend import remove_line_noise
+
+raw.load_data()
+remove_line_noise(
+    raw,
+    line_freq=50,
+    picks="eeg",
+    include_harmonics=True,
+    window_length=10,
+    overlap=0.5,
+)
+```
