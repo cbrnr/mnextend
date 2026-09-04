@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Automate MNExtend release process.
+"""Automate MNEXTEND release process.
 
 Run from the repository root:
 
