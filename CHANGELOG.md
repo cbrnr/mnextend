@@ -1,4 +1,12 @@
 ## [UNRELEASED] · YYYY-MM-DD
+### ✨ Added
+- Add `discrete_ids` parameter to `read_raw_xdf()` to specify streams containing discrete values such as trigger codes, which are resampled without filtering by holding the previous value ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+
+### 🔧 Fixed
+- Fix resampling of XDF trigger streams (detected by their stream type or stim channel type), which are now loaded as stim channels without filtering artifacts ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+
+### 🌀 Changed
+- Convert numeric XDF streams with a nominal sampling frequency of 0 Hz to annotations unless they are listed in `stream_ids`, and raise a `ValueError` if `stream_ids` contains string streams ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 
 ## [0.4.0] · 2026-10-07
 ### ✨ Added

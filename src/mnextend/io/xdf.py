@@ -98,6 +98,17 @@ _UNIT_WORDS = {
 # returned by `_parse_unit` for unit strings that are not recognized
 _UNKNOWN_UNIT = object()
 
+# stream types (lower case) that mark a regular-rate numeric stream as discrete
+_EVENT_STREAM_TYPES = {
+    "marker",
+    "markers",
+    "event",
+    "events",
+    "trigger",
+    "triggers",
+    "stim",
+}
+
 
 class RawXDF(BaseRaw):
     """Raw data from .xdf file."""
@@ -110,6 +121,7 @@ class RawXDF(BaseRaw):
         prefix_markers=False,
         fs_new=None,
         gap_threshold=0.0,
+        discrete_ids=None,
         *args,
         **kwargs,
     ):
@@ -120,11 +132,12 @@ class RawXDF(BaseRaw):
         fname : str | Path
             File name to load.
         stream_ids : int | list[int]
-            ID(s) of streams to load. Use `pyxdf.resolve_streams(fname)` to list
-            available streams.
+            ID(s) of streams to load as channels. Use `pyxdf.resolve_streams(fname)` to
+            list available streams. String streams cannot be loaded as channels.
         marker_ids : list[int] | None
-            IDs of marker streams to load. If `None`, load all marker streams. A marker
-            stream is a stream with a nominal sampling frequency of 0 Hz.
+            IDs of irregular marker streams (string or numeric streams with a nominal
+            sampling frequency of 0 Hz) to load as annotations. If `None`, load all
+            marker streams that are not listed in `stream_ids`.
         prefix_markers : bool
             Whether to prefix marker streams with their corresponding stream ID.
         fs_new : float | None
@@ -136,10 +149,34 @@ class RawXDF(BaseRaw):
             samples as NaN. Set to 0.0 to disable gap detection. If `gap_threshold > 0`,
             linear interpolation is used instead of resampling, and `fs_new` must be
             specified.
+        discrete_ids : list[int] | None
+            IDs of streams whose channels contain discrete values (such as trigger
+            codes). If `None`, discrete streams are detected automatically (see Notes).
 
         Notes
         -----
-        Resampling depends on whether gap detection is requested or not:
+        Streams are handled as follows:
+        - String streams are always converted to annotations (one per non-empty
+          string). Numeric streams with a nominal sampling frequency of 0 Hz are
+          converted to annotations (one per sample, the value is the description) unless
+          they are listed in `stream_ids`, in which case they are loaded as discrete
+          channels (this requires `fs_new`).
+        - Numeric streams with a regular sampling frequency are loaded as channels.
+          Their channels are either continuous or discrete. A channel is discrete if its
+          stream is listed in `discrete_ids`. If `discrete_ids` is `None`, a channel is
+          discrete if its stream type is one of "Marker(s)", "Event(s)", "Trigger(s)" or
+          "Stim" (case-insensitive) or if its channel type is "stim". Numeric streams
+          with 0 Hz loaded as channels are always discrete.
+        - Discrete channels are never filtered and are resampled by holding the previous
+          value, so that they only contain values from the original data. A
+          `RuntimeWarning` is issued if value changes are lost due to downsampling.
+          Discrete channels of regular-rate streams get the channel type "stim" unless
+          the stream specifies a valid type.
+        - "stim" channels contain 0 instead of NaN outside their stream's time range and
+          in detected gaps.
+
+        Resampling of continuous channels depends on whether gap detection is requested
+        or not:
         - If `gap_threshold > 0`, uses linear interpolation to resample to the new
           sampling frequency `fs_new`. This method will detect gaps in the original
           timestamps and mark those samples as NaN.
@@ -178,13 +215,28 @@ class RawXDF(BaseRaw):
         streams, header = load_xdf(fname)
         streams = {stream["info"]["stream_id"]: stream for stream in streams}
 
-        if all(_is_stringstream(streams[stream_id]) for stream_id in stream_ids):
-            raise RuntimeError(
-                "Loading only marker streams is not supported, at least one stream must"
-                " be a regular stream."
+        string_ids = [i for i in stream_ids if _is_string_stream(streams[i])]
+        if string_ids:
+            raise ValueError(
+                f"String stream(s) {', '.join(map(str, string_ids))} cannot be loaded "
+                "as channels, string streams are converted to annotations (see "
+                "`marker_ids`)."
             )
 
-        labels_all, types_all, units_all = [], [], []
+        both_ids = sorted(set(stream_ids) & set(marker_ids or []))
+        if both_ids:
+            raise ValueError(
+                f"Stream(s) {', '.join(map(str, both_ids))} must not be listed in both "
+                "`stream_ids` and `marker_ids`."
+            )
+
+        if fs_new is None and _stream_srate(streams[stream_ids[0]]) == 0:
+            raise ValueError(
+                "Argument `fs_new` is required when reading a stream with a nominal "
+                "sampling frequency of 0 Hz."
+            )
+
+        labels_all, types_all, units_all, discrete_all = [], [], [], []
         channel_types = get_channel_type_constants(True)
         for stream_id in stream_ids:
             stream = streams[stream_id]
@@ -197,7 +249,7 @@ class RawXDF(BaseRaw):
                     if ch["type"] and ch["type"][0].lower() in channel_types:
                         types.append(ch["type"][0].lower())
                     else:
-                        types.append("misc")
+                        types.append(None)
                     units.append(ch["unit"][0] if ch["unit"] else "NA")
             except (TypeError, IndexError):  # no channel labels found
                 pass
@@ -206,17 +258,26 @@ class RawXDF(BaseRaw):
             if not units:
                 units = ["NA" for _ in range(n_chans)]
             if not types:
-                types = ["misc" for _ in range(n_chans)]
+                types = [None for _ in range(n_chans)]
+            discrete = _discrete_channels(stream, types, discrete_ids)
+            # discrete channels of regular streams default to stim, irregular streams
+            # are often sensor values (like heart rate) and keep the misc default
+            regular = _stream_srate(stream) > 0
+            types = [
+                t if t is not None else "stim" if d and regular else "misc"
+                for t, d in zip(types, discrete)
+            ]
             labels_all.extend(labels)
             types_all.extend(types)
             units_all.extend(units)
+            discrete_all.extend(discrete)
 
         # interpolate if gap detection is requested, otherwise resample
         use_interpolation = gap_threshold > 0
 
         if fs_new is not None:
             data, first_time = _resample_streams(
-                streams, stream_ids, fs_new, use_interpolation
+                streams, stream_ids, fs_new, use_interpolation, np.array(discrete_all)
             )
             fs = fs_new
 
@@ -225,24 +286,30 @@ class RawXDF(BaseRaw):
                 col_start = 0
                 for stream_id in stream_ids:
                     n_chans = int(streams[stream_id]["info"]["channel_count"][0])
-                    _mark_gaps(
-                        data,
-                        timestamps,
-                        streams[stream_id]["time_stamps"],
-                        gap_threshold,
-                        slice(col_start, col_start + n_chans),
-                    )
+                    # irregular streams have no nominal sample spacing, so no gaps
+                    if _stream_srate(streams[stream_id]) > 0:
+                        _mark_gaps(
+                            data,
+                            timestamps,
+                            streams[stream_id]["time_stamps"],
+                            gap_threshold,
+                            slice(col_start, col_start + n_chans),
+                        )
                     col_start += n_chans
         else:  # only possible if a single stream was selected
             if len(streams[stream_ids[0]]["time_stamps"]) == 0:
                 raise ValueError(f"Stream {stream_ids[0]} contains no samples.")
-            data = streams[stream_ids[0]]["time_series"]
+            data = np.array(streams[stream_ids[0]]["time_series"], dtype=float)
             first_time = streams[stream_ids[0]]["time_stamps"][0]
             fs = float(
                 np.array(streams[stream_ids[0]]["info"]["effective_srate"]).item()
             )
             if fs == 0:  # fall back to nominal rate (e.g. when only one sample exists)
                 fs = float(streams[stream_ids[0]]["info"]["nominal_srate"][0])
+
+        # NaN in stim channels breaks `mne.find_events`, and 0 means "no event" anyway
+        stim = np.array(types_all) == "stim"
+        data[:, stim] = np.where(np.isnan(data[:, stim]), 0.0, data[:, stim])
 
         info = mne.create_info(ch_names=labels_all, sfreq=fs, ch_types=types_all)
 
@@ -271,11 +338,11 @@ class RawXDF(BaseRaw):
             if p is not None and p[1] is not None:
                 ch["unit"] = p[1]
 
-        # convert string streams to annotations
+        # convert string streams and irregular numeric streams to annotations
         for stream_id, stream in streams.items():
-            if not _is_stringstream(stream):
+            if stream_id in stream_ids or not _is_marker_stream(stream):
                 continue
-            srate = float(stream["info"]["nominal_srate"][0])
+            srate = _stream_srate(stream)
             # classic marker streams (srate=0) respect the user's marker selection;
             # regular-rate string streams are always converted automatically
             if srate == 0 and marker_ids is not None and stream_id not in marker_ids:
@@ -283,10 +350,14 @@ class RawXDF(BaseRaw):
             prefix = f"{stream_id}-" if prefix_markers else ""
             onsets_list, descriptions_list = [], []
             for ts, sub in zip(stream["time_stamps"], stream["time_series"]):
-                for item in sub:
-                    if item:  # skip empty strings
-                        onsets_list.append(ts - first_time)
-                        descriptions_list.append(f"{prefix}{item}")
+                if _is_string_stream(stream):
+                    items = [item for item in sub if item]  # skip empty strings
+                else:  # one annotation per sample with all (non-NaN) channel values
+                    values = [str(value) for value in sub if not np.isnan(value)]
+                    items = [",".join(values)] if values else []
+                for item in items:
+                    onsets_list.append(ts - first_time)
+                    descriptions_list.append(f"{prefix}{item}")
             if onsets_list:
                 self.annotations.append(
                     onsets_list, [0] * len(onsets_list), descriptions_list
@@ -377,7 +448,9 @@ def _mark_gaps(data, timestamps, original_timestamps, gap_threshold, cols):
             data[start_idx:end_idx, cols] = np.nan
 
 
-def _resample_streams(streams, stream_ids, fs_new, use_interpolation=False):
+def _resample_streams(
+    streams, stream_ids, fs_new, use_interpolation=False, discrete=None
+):
     """Resample XDF stream(s) to a common sampling rate.
 
     Parameters
@@ -389,7 +462,12 @@ def _resample_streams(streams, stream_ids, fs_new, use_interpolation=False):
     fs_new : float
         Target sampling frequency in Hz.
     use_interpolation : bool
-        If True, use linear interpolation. If False, use Fourier-based resampling.
+        If True, use linear interpolation. If False, use Fourier-based resampling. This
+        only affects continuous channels.
+    discrete : np.ndarray | None
+        Boolean mask of shape (n_channels,) indicating discrete channels, which are not
+        filtered and are resampled by holding the previous value. If `None`, all
+        channels are continuous.
 
     Returns
     -------
@@ -436,42 +514,104 @@ def _resample_streams(streams, stream_ids, fs_new, use_interpolation=False):
 
         start_time = timestamps[0]
         end_time = timestamps[-1]
-        x_old = streams[stream_id]["time_series"][sort_indices[unique_idx], :]
-
-        # apply anti-aliasing filter if downsampling
-        fs_original = float(
-            np.array(streams[stream_id]["info"]["effective_srate"]).item()
-        )
-        if fs_new < fs_original:
-            nyquist = fs_new / 2
-            sos = butter(8, 0.95 * nyquist, btype="low", fs=fs_original, output="sos")
-            x_old = sosfiltfilt(sos, x_old, axis=0)
+        time_series = np.asarray(streams[stream_id]["time_series"], dtype=float)
+        x_old = time_series[sort_indices[unique_idx], :]
+        col_end = col_start + x_old.shape[1]
+        if discrete is None:
+            is_discrete = np.zeros(x_old.shape[1], dtype=bool)
+        else:
+            is_discrete = discrete[col_start:col_end]
 
         # find valid time range in output grid
         row_start = int(np.floor((start_time - first_time) * fs_new))
         row_end = int(np.ceil((end_time - first_time) * fs_new))
         time_new = time_grid[row_start:row_end]
+        x_new = np.full((len(time_new), x_old.shape[1]), np.nan)
 
-        if use_interpolation:  # linear interpolation
-            interpolator = interp1d(
-                timestamps,
-                x_old,
-                axis=0,
-                kind="linear",
-                bounds_error=False,
-                fill_value=np.nan,
+        if is_discrete.any():
+            x_new[:, is_discrete] = _hold_previous(
+                stream_id, timestamps, x_old[:, is_discrete], time_new, fs_new
             )
-            x_new = interpolator(time_new)
-        else:  # Fourier-based resampling
-            len_new = len(time_new)
-            x_new = scipy.signal.resample(x_old, len_new, axis=0)
 
-        col_end = col_start + x_new.shape[1]
+        if not is_discrete.all():
+            x_cont = x_old[:, ~is_discrete]
+
+            # apply anti-aliasing filter if downsampling
+            fs_original = float(
+                np.array(streams[stream_id]["info"]["effective_srate"]).item()
+            )
+            if fs_new < fs_original:
+                nyquist = fs_new / 2
+                sos = butter(
+                    8, 0.95 * nyquist, btype="low", fs=fs_original, output="sos"
+                )
+                x_cont = sosfiltfilt(sos, x_cont, axis=0)
+
+            if use_interpolation:  # linear interpolation
+                interpolator = interp1d(
+                    timestamps,
+                    x_cont,
+                    axis=0,
+                    kind="linear",
+                    bounds_error=False,
+                    fill_value=np.nan,
+                )
+                x_new[:, ~is_discrete] = interpolator(time_new)
+            else:  # Fourier-based resampling
+                len_new = len(time_new)
+                x_new[:, ~is_discrete] = scipy.signal.resample(x_cont, len_new, axis=0)
+
         all_time_series[row_start:row_end, col_start:col_end] = x_new
 
-        col_start += x_new.shape[1]
+        col_start = col_end
 
     return all_time_series, first_time
+
+
+def _hold_previous(stream_id, timestamps, x, time_new, fs_new):
+    """Resample discrete data by holding the previous value.
+
+    Parameters
+    ----------
+    stream_id : int
+        ID of the stream (only used in the warning message).
+    timestamps : np.ndarray
+        Sorted unique original timestamps.
+    x : np.ndarray
+        Original data of shape (n_samples, n_channels).
+    time_new : np.ndarray
+        Timestamps of the new grid.
+    fs_new : float
+        Target sampling frequency in Hz (only used in the warning message).
+
+    Returns
+    -------
+    np.ndarray
+        Resampled data of shape (len(time_new), n_channels). Samples before the first
+        original timestamp are NaN.
+    """
+    idx = np.searchsorted(timestamps, time_new, side="right") - 1
+    x_new = x[np.clip(idx, 0, None)]
+    x_new[idx < 0] = np.nan
+
+    # only count changes in original samples that are covered by the new grid
+    n_covered = idx[-1] + 1 if len(idx) else 0
+    lost = _count_changes(x[:n_covered]) - _count_changes(x_new)
+    if lost > 0:
+        warnings.warn(
+            f"Resampling stream {stream_id} to {fs_new} Hz lost {lost} value change(s) "
+            "in discrete channels (events shorter than one sample at the new sampling "
+            "frequency).",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+    return x_new
+
+
+def _count_changes(x):
+    """Count value changes along the first axis, ignoring changes from or to NaN."""
+    diff = np.diff(x, axis=0)
+    return np.count_nonzero(diff[~np.isnan(diff)])
 
 
 def read_raw_xdf(
@@ -481,6 +621,7 @@ def read_raw_xdf(
     prefix_markers=False,
     fs_new=None,
     gap_threshold=0.0,
+    discrete_ids=None,
     **kwargs,
 ):
     """Read XDF file.
@@ -490,12 +631,13 @@ def read_raw_xdf(
     fname : str
         File name to load.
     stream_ids : int | list[int] | None
-        ID(s) of streams to load. If `None`, raises a `ValueError` listing the available
-        regular stream IDs. Use `pyxdf.resolve_streams(fname)` to list available
-        streams.
+        ID(s) of streams to load as channels. If `None`, raises a `ValueError` listing
+        the available numeric stream IDs. Use `pyxdf.resolve_streams(fname)` to list
+        available streams. String streams cannot be loaded as channels.
     marker_ids : list[int] | None
-        IDs of marker streams to load. If `None`, load all marker streams. A marker
-        stream is a stream with a nominal sampling frequency of 0 Hz.
+        IDs of irregular marker streams (string or numeric streams with a nominal
+        sampling frequency of 0 Hz) to load as annotations. If `None`, load all marker
+        streams that are not listed in `stream_ids`.
     prefix_markers : bool
         Whether to prefix marker streams with their corresponding stream ID.
     fs_new : float | None
@@ -507,6 +649,10 @@ def read_raw_xdf(
         samples as NaN. Set to 0.0 to disable gap detection. If `gap_threshold > 0`,
         linear interpolation is used instead of resampling, and `fs_new` must be
         specified.
+    discrete_ids : list[int] | None
+        IDs of streams whose channels contain discrete values (such as trigger codes).
+        If `None`, discrete streams are detected automatically. See `RawXDF` for details
+        on how different stream types are handled.
 
     Returns
     -------
@@ -519,7 +665,7 @@ def read_raw_xdf(
         streams = resolve_streams(fname)
         ids = [s["stream_id"] for s in streams if s["channel_format"] != "string"]
         msg = (
-            "Argument `stream_ids` is required (available regular stream IDs: "
+            "Argument `stream_ids` is required (available numeric stream IDs: "
             f"{', '.join(map(str, ids))})."
         )
         raise ValueError(msg)
@@ -530,11 +676,53 @@ def read_raw_xdf(
         prefix_markers,
         fs_new,
         gap_threshold,
+        discrete_ids,
     )
 
 
-def _is_stringstream(stream):
+def _is_string_stream(stream):
     return stream["info"]["channel_format"][0] == "string"
+
+
+def _is_marker_stream(stream):
+    """Return whether a stream is converted to annotations by default."""
+    return _is_string_stream(stream) or _stream_srate(stream) == 0
+
+
+def _stream_srate(stream):
+    return float(stream["info"]["nominal_srate"][0])
+
+
+def _stream_type(stream):
+    """Return the stream type in lower case (empty if missing)."""
+    stream_type = stream["info"].get("type") or [None]
+    return str(stream_type[0] or "").strip().lower()
+
+
+def _discrete_channels(stream, types, discrete_ids):
+    """Determine which channels of a numeric stream are discrete.
+
+    Parameters
+    ----------
+    stream : dict
+        The XDF stream.
+    types : list[str | None]
+        Channel types from the stream description (`None` if not specified).
+    discrete_ids : list[int] | None
+        IDs of discrete streams, or `None` to detect them automatically.
+
+    Returns
+    -------
+    list[bool]
+        Whether each channel is discrete.
+    """
+    if _stream_srate(stream) == 0:  # irregular values can only be held
+        return [True] * len(types)
+    if discrete_ids is not None:
+        return [stream["info"]["stream_id"] in discrete_ids] * len(types)
+    if _stream_type(stream) in _EVENT_STREAM_TYPES:
+        return [True] * len(types)
+    return [t == "stim" for t in types]
 
 
 def get_xml(fname):
