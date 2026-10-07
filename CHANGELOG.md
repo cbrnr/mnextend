@@ -1,4 +1,4 @@
-## [UNRELEASED] · YYYY-MM-DD
+## [0.4.0] · 2026-10-07
 ### ✨ Added
 - Support more units when reading XDF files ([#13](https://github.com/cbrnr/mnextend/pull/13) by [Clemens Brunner](https://github.com/cbrnr))
 
