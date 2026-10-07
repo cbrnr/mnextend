@@ -1,4 +1,6 @@
 ## [UNRELEASED] · YYYY-MM-DD
+### 🔧 Fixed
+- Fix exporting EEGLAB `.set` files and ICLabel tests with newer MNE and NumPy versions ([#14](https://github.com/cbrnr/mnextend/pull/14) by [Clemens Brunner](https://github.com/cbrnr))
 
 ## [0.3.0] · 2026-09-04
 ### ✨ Added

@@ -19,7 +19,11 @@ def iclabel_dataset(request):
     data = np.load(data_path)
 
     info = mne.create_info(list(data["ch_names"]), data["sfreq"], ch_types="eeg")
-    montage = mne.channels.make_standard_montage("standard_1020")
+    # "standard_1020" was renamed to "colin27_1020" in newer MNE versions
+    name = "colin27_1020"
+    if name not in mne.channels.get_builtin_montages():
+        name = "standard_1020"
+    montage = mne.channels.make_standard_montage(name)
     info.set_montage(montage)
     if data["raw"].ndim == 3:
         inst = mne.EpochsArray(data["raw"], info)

@@ -24,7 +24,7 @@ def write_set(fname, raw):
     chanlocs = fromarrays([ch_names], names=["labels"])
     events = fromarrays(
         [
-            raw.annotations.description,
+            np.array(raw.annotations.description.tolist(), dtype=str),  # no StringDType
             raw.annotations.onset * fs + 1,
             raw.annotations.duration * fs,
         ],
