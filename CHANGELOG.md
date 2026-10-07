@@ -1,4 +1,7 @@
 ## [UNRELEASED] · YYYY-MM-DD
+### ✨ Added
+- Support more units when reading XDF files ([#13](https://github.com/cbrnr/mnextend/pull/13) by [Clemens Brunner](https://github.com/cbrnr))
+
 ### 🔧 Fixed
 - Fix exporting EEGLAB `.set` files and ICLabel tests with newer MNE and NumPy versions ([#14](https://github.com/cbrnr/mnextend/pull/14) by [Clemens Brunner](https://github.com/cbrnr))
 

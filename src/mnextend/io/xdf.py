@@ -3,6 +3,7 @@
 # License: BSD (3-clause)
 
 import struct
+import warnings
 import xml.etree.ElementTree as ETree
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -11,8 +12,91 @@ import mne
 import numpy as np
 import scipy.signal
 from mne.io import BaseRaw, get_channel_type_constants
+from mne.io.constants import FIFF
 from pyxdf import load_xdf, resolve_streams
 from pyxdf.pyxdf import _read_varlen_int, open_xdf
+
+# maps base unit symbols (case-sensitive) to (FIFF unit code or None, accepts prefixes);
+# degrees are not converted to radians and MNE has no unit for them, so they keep the
+# default
+_UNIT_SYMBOLS = {
+    "V": (FIFF.FIFF_UNIT_V, True),
+    "T": (FIFF.FIFF_UNIT_T, True),
+    "m": (FIFF.FIFF_UNIT_M, True),
+    "rad": (FIFF.FIFF_UNIT_RAD, True),
+    "deg": (None, False),
+    "°": (None, False),
+    "S": (FIFF.FIFF_UNIT_S, True),
+    "°C": (FIFF.FIFF_UNIT_CEL, True),
+    "K": (FIFF.FIFF_UNIT_K, True),
+    "s": (FIFF.FIFF_UNIT_SEC, True),
+    "Hz": (FIFF.FIFF_UNIT_HZ, True),
+    "px": (FIFF.FIFF_UNIT_PX, False),
+}
+
+# maps SI prefix symbols (case-sensitive) to their scale; the Greek mu is normalized to
+# the micro sign before lookup and `u` is a common ASCII substitute
+_PREFIXES = {
+    "f": 1e-15,
+    "p": 1e-12,
+    "n": 1e-9,
+    "µ": 1e-6,
+    "u": 1e-6,
+    "m": 1e-3,
+    "c": 1e-2,
+    "k": 1e3,
+}
+
+# maps unit words (lower case, matched case-insensitively) like the symbols above
+_UNIT_WORDS = {
+    **{
+        word: (scale, FIFF.FIFF_UNIT_V)
+        for words, scale in [
+            (("volt", "volts"), 1.0),
+            (("millivolt", "millivolts"), 1e-3),
+            (("microvolt", "microvolts"), 1e-6),
+            (("nanovolt", "nanovolts"), 1e-9),
+        ]
+        for word in words
+    },
+    **{
+        word: (scale, FIFF.FIFF_UNIT_T)
+        for words, scale in [
+            (("tesla",), 1.0),
+            (("picotesla",), 1e-12),
+            (("femtotesla",), 1e-15),
+        ]
+        for word in words
+    },
+    **{
+        word: (scale, FIFF.FIFF_UNIT_M)
+        for words, scale in [
+            (("meter", "meters", "metre", "metres"), 1.0),
+            (("centimeter", "centimeters", "centimetre", "centimetres"), 1e-2),
+            (("millimeter", "millimeters", "millimetre", "millimetres"), 1e-3),
+        ]
+        for word in words
+    },
+    "radian": (1.0, FIFF.FIFF_UNIT_RAD),
+    "radians": (1.0, FIFF.FIFF_UNIT_RAD),
+    "degree": (1.0, None),
+    "degrees": (1.0, None),
+    "siemens": (1.0, FIFF.FIFF_UNIT_S),
+    "microsiemens": (1e-6, FIFF.FIFF_UNIT_S),
+    "celsius": (1.0, FIFF.FIFF_UNIT_CEL),
+    "degrees celsius": (1.0, FIFF.FIFF_UNIT_CEL),
+    "kelvin": (1.0, FIFF.FIFF_UNIT_K),
+    "second": (1.0, FIFF.FIFF_UNIT_SEC),
+    "seconds": (1.0, FIFF.FIFF_UNIT_SEC),
+    "millisecond": (1e-3, FIFF.FIFF_UNIT_SEC),
+    "milliseconds": (1e-3, FIFF.FIFF_UNIT_SEC),
+    "hertz": (1.0, FIFF.FIFF_UNIT_HZ),
+    "pixel": (1.0, FIFF.FIFF_UNIT_PX),
+    "pixels": (1.0, FIFF.FIFF_UNIT_PX),
+}
+
+# returned by `_parse_unit` for unit strings that are not recognized
+_UNKNOWN_UNIT = object()
 
 
 class RawXDF(BaseRaw):
@@ -63,6 +147,14 @@ class RawXDF(BaseRaw):
           or does not resample at all if `fs_new` is `None`. This method assumes that
           the original timestamps are regular and does not account for any gaps.
         By default, gap detection is disabled.
+
+        Data are converted to SI units (for example, microvolts to volts and millimeters
+        to meters) based on the unit of each channel, and the corresponding MNE unit is
+        stored in `info["chs"][i]["unit"]`. Channels without a unit (empty, `"NA"` or
+        missing) are left unchanged and keep MNE's default unit for their channel type.
+        Angles in degrees are recognized, but neither converted to radians nor assigned
+        a unit because MNE has no unit for degrees. A `RuntimeWarning` lists all unit
+        strings that are not recognized (the corresponding channels are not scaled).
         """
         if len(stream_ids) == 0:
             raise ValueError("Argument `stream_ids` must not be empty.")
@@ -154,10 +246,30 @@ class RawXDF(BaseRaw):
 
         info = mne.create_info(ch_names=labels_all, sfreq=fs, ch_types=types_all)
 
-        microvolts = ("microvolt", "microvolts", "µV", "μV", "uV")
-        scale = np.array([1e-6 if u in microvolts else 1 for u in units_all])
+        parsed = [_parse_unit(unit) for unit in units_all]
+        unknown = sorted(
+            {
+                str(unit).strip()
+                for unit, p in zip(units_all, parsed)
+                if p is _UNKNOWN_UNIT
+            }
+        )
+        if unknown:
+            warnings.warn(
+                f"Unrecognized unit(s) {', '.join(map(repr, unknown))}, data of the "
+                "corresponding channels are not scaled.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        known = [None if p is None or p is _UNKNOWN_UNIT else p for p in parsed]
+        scale = np.array([1.0 if p is None else p[0] for p in known])
         data = (data * scale).T
         super().__init__(preload=data, info=info, filenames=[fname], *args, **kwargs)
+
+        # data are already in SI, so `unit_mul` stays at 0
+        for ch, p in zip(self.info["chs"], known):
+            if p is not None and p[1] is not None:
+                ch["unit"] = p[1]
 
         # convert string streams to annotations
         for stream_id, stream in streams.items():
@@ -191,6 +303,39 @@ class RawXDF(BaseRaw):
                 )
                 meas_date = datetime.fromisoformat(recording_datetime)
             self.set_meas_date(meas_date.astimezone(UTC))
+
+
+def _parse_unit(unit):
+    """Parse an XDF channel unit string.
+
+    Parameters
+    ----------
+    unit : str | None
+        Unit string as found in the stream header.
+
+    Returns
+    -------
+    tuple[float, int | None] | None | object
+        `(scale, fiff_unit)` for a recognized unit, where `scale` converts to SI and
+        `fiff_unit` is the MNE unit code (or `None` if MNE has no matching unit).
+        `None` if the channel has no unit (`None`, empty or `"NA"`), and the
+        `_UNKNOWN_UNIT` sentinel if the unit is not recognized.
+    """
+    if unit is None:
+        return None
+    unit = str(unit).strip()
+    if unit in ("", "NA"):
+        return None
+    unit = unit.replace("\u03bc", "\u00b5")  # Greek mu -> micro sign
+    # symbols are case-sensitive; try the whole string first so that `m` is a metre
+    # and not a prefix, and `mm` is a millimetre
+    if unit in _UNIT_SYMBOLS:
+        return 1.0, _UNIT_SYMBOLS[unit][0]
+    if unit[0] in _PREFIXES and unit[1:] in _UNIT_SYMBOLS:
+        fiff_unit, prefixable = _UNIT_SYMBOLS[unit[1:]]
+        if prefixable:
+            return _PREFIXES[unit[0]], fiff_unit
+    return _UNIT_WORDS.get(unit.lower(), _UNKNOWN_UNIT)
 
 
 def _mark_gaps(data, timestamps, original_timestamps, gap_threshold, cols):
