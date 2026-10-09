@@ -359,9 +359,61 @@ def test_numeric_marker_stream_as_channel(monkeypatch, tmp_path):
     assert np.isnan(data[:50]).all()
     np.testing.assert_array_equal(data[50:80], 60)
     np.testing.assert_array_equal(data[80:100], 65)
+    np.testing.assert_array_equal(data[100], 70)  # last value is not lost
+    assert np.isnan(data[101:]).all()
 
     with pytest.raises(ValueError, match="`fs_new` is required"):
         _read_streams(monkeypatch, tmp_path, [heart_rate], {2: "d"})
+
+
+@pytest.mark.parametrize("gap_threshold", [0.0, 0.5])
+def test_resampling_keeps_last_sample(monkeypatch, tmp_path, gap_threshold):
+    """Test that resampling to the original rate keeps all samples."""
+    data = np.random.default_rng(0).standard_normal((200, 1))
+    eeg = _make_stream(["NA"], data, types=["eeg"])
+    raw = _read_streams(
+        monkeypatch, tmp_path, [eeg], [1], fs_new=100, gap_threshold=gap_threshold
+    )
+    np.testing.assert_allclose(raw.get_data()[0], data[:, 0])
+
+
+def test_resampling_timestamps_on_grid(monkeypatch, tmp_path):
+    """Test that floating-point errors in timestamps do not shift or drop samples."""
+    # timestamps computed differently than the grid differ in the last bits
+    time_stamps = np.linspace(1000.1, 1000.1 + 99 / 100, 100)
+    eeg = _make_stream(
+        ["NA"], np.ones((100, 1)), types=["eeg"], time_stamps=time_stamps
+    )
+    data = np.arange(100)[:, np.newaxis]
+    trigger = _make_stream(
+        ["NA"],
+        data,
+        stream_id=2,
+        stream_type="Trigger",
+        types=[None],
+        time_stamps=time_stamps,
+    )
+    raw = _read_streams(
+        monkeypatch, tmp_path, [eeg, trigger], [1, 2], fs_new=100, gap_threshold=0.5
+    )
+    assert not np.isnan(raw.get_data()).any()
+    np.testing.assert_array_equal(raw.get_data(picks="stim")[0], data[:, 0])
+
+
+def test_discrete_last_value_between_samples(monkeypatch, tmp_path):
+    """Test that the last value of a discrete stream is kept if it is off the grid."""
+    heart_rate = _make_stream(
+        ["NA"],
+        np.array([[60.0], [65.0], [70.0]]),
+        stream_id=2,
+        srate=0,
+        types=[None],
+        time_stamps=np.array([0.5, 0.8, 1.005]),
+    )
+    raw = _read_streams(monkeypatch, tmp_path, [heart_rate], {2: "d"}, fs_new=100)
+    data = raw.get_data()[0]
+    assert len(data) == 52  # the last value appears at the first sample after it
+    np.testing.assert_array_equal(data[30:], [65] * 21 + [70])
 
 
 def test_string_stream_modes(monkeypatch, tmp_path):

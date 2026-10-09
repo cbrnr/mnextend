@@ -128,6 +128,10 @@ _MODES = {
     "a": "annotations",
 }
 
+# timestamps closer than this to a sample of the resampling grid (as a fraction of the
+# sample period) are considered to lie on the grid
+_GRID_TOLERANCE = 1e-6
+
 
 class RawXDF(BaseRaw):
     """Raw data from .xdf file."""
@@ -523,24 +527,37 @@ def _resample_streams(
     from scipy.interpolate import interp1d
     from scipy.signal import butter, sosfiltfilt
 
-    start_times = []
-    end_times = []
-    n_total_chans = 0
     for stream_id in stream_ids:
         if len(streams[stream_id]["time_stamps"]) == 0:
             raise ValueError(f"Stream {stream_id} contains no samples.")
-        start_times.append(streams[stream_id]["time_stamps"][0])
-        end_times.append(streams[stream_id]["time_stamps"][-1])
-        n_total_chans += int(streams[stream_id]["info"]["channel_count"][0])
-    first_time = min(start_times)
-    last_time = max(end_times)
+    first_time = min(np.min(streams[i]["time_stamps"]) for i in stream_ids)
 
-    n_samples = int(np.ceil((last_time - first_time) * fs_new))
+    # find the rows of each stream in the output grid
+    rows = []
+    col_start = 0
+    for stream_id in stream_ids:
+        timestamps = streams[stream_id]["time_stamps"]
+        n_chans = int(streams[stream_id]["info"]["channel_count"][0])
+        all_discrete = (
+            discrete is not None and discrete[col_start : col_start + n_chans].all()
+        )
+        row_start = _grid_index(np.min(timestamps) - first_time, fs_new)
+        # include the last timestamp: continuous data end at the last grid sample at or
+        # before it, discrete data at the first grid sample at or after it (otherwise
+        # holding the previous value would lose the last value)
+        row_end = 1 + _grid_index(
+            np.max(timestamps) - first_time, fs_new, round_up=all_discrete
+        )
+        rows.append((row_start, row_end))
+        col_start += n_chans
+    n_total_chans = col_start
+
+    n_samples = max(row_end for _, row_end in rows)
     all_time_series = np.full((n_samples, n_total_chans), np.nan)
     time_grid = first_time + np.arange(n_samples) / fs_new
 
     col_start = 0
-    for stream_id in stream_ids:
+    for stream_id, (row_start, row_end) in zip(stream_ids, rows):
         timestamps = streams[stream_id]["time_stamps"]
         sort_indices = np.argsort(timestamps)
         timestamps = timestamps[sort_indices]
@@ -555,8 +572,7 @@ def _resample_streams(
                 RuntimeWarning,
             )
 
-        start_time = timestamps[0]
-        end_time = timestamps[-1]
+        timestamps = _snap_to_grid(timestamps, first_time, fs_new)
         time_series = np.asarray(streams[stream_id]["time_series"], dtype=float)
         x_old = time_series[sort_indices[unique_idx], :]
         col_end = col_start + x_old.shape[1]
@@ -565,9 +581,6 @@ def _resample_streams(
         else:
             is_discrete = discrete[col_start:col_end]
 
-        # find valid time range in output grid
-        row_start = int(np.floor((start_time - first_time) * fs_new))
-        row_end = int(np.ceil((end_time - first_time) * fs_new))
         time_new = time_grid[row_start:row_end]
         x_new = np.full((len(time_new), x_old.shape[1]), np.nan)
 
@@ -609,6 +622,59 @@ def _resample_streams(
         col_start = col_end
 
     return all_time_series, first_time
+
+
+def _grid_index(offset, fs, round_up=False):
+    """Convert a time offset to the index of a sample in the resampling grid.
+
+    Parameters
+    ----------
+    offset : float
+        Time offset from the first sample of the grid in seconds.
+    fs : float
+        Sampling frequency of the grid in Hz.
+    round_up : bool
+        Whether to return the index of the grid sample at or after `offset` instead of
+        the one at or before it.
+
+    Returns
+    -------
+    int
+        Index of the grid sample. Offsets within `_GRID_TOLERANCE` samples of a grid
+        sample return the index of that sample.
+    """
+    position = offset * fs
+    nearest = round(position)
+    if abs(position - nearest) < _GRID_TOLERANCE:
+        return int(nearest)
+    return int(np.ceil(position) if round_up else np.floor(position))
+
+
+def _snap_to_grid(timestamps, first_time, fs):
+    """Move timestamps within `_GRID_TOLERANCE` samples of a grid sample onto it.
+
+    This makes sure that floating-point errors do not move timestamps that lie on the
+    grid just outside of it (which would lose the value when holding values or produce
+    NaN when interpolating).
+
+    Parameters
+    ----------
+    timestamps : np.ndarray
+        Timestamps in seconds.
+    first_time : float
+        Time of the first sample of the grid in seconds.
+    fs : float
+        Sampling frequency of the grid in Hz.
+
+    Returns
+    -------
+    np.ndarray
+        Timestamps in seconds.
+    """
+    positions = (timestamps - first_time) * fs
+    nearest = np.round(positions)
+    on_grid = np.abs(positions - nearest) < _GRID_TOLERANCE
+    return np.where(on_grid, first_time + nearest / fs, timestamps)
 
 
 def _hold_previous(stream_id, timestamps, x, time_new, fs_new):
