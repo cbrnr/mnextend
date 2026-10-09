@@ -135,7 +135,7 @@ class RawXDF(BaseRaw):
             ID(s) of streams to load as channels. Use `pyxdf.resolve_streams(fname)` to
             list available streams. String streams cannot be loaded as channels.
         marker_ids : list[int] | None
-            IDs of irregular marker streams (string or numeric streams with a nominal
+            IDs of marker streams (string streams and numeric streams with a nominal
             sampling frequency of 0 Hz) to load as annotations. If `None`, load all
             marker streams that are not listed in `stream_ids`.
         prefix_markers : bool
@@ -151,7 +151,8 @@ class RawXDF(BaseRaw):
             specified.
         discrete_ids : list[int] | None
             IDs of streams whose channels contain discrete values (such as trigger
-            codes). If `None`, discrete streams are detected automatically (see Notes).
+            codes). If `None`, discrete streams are detected from their stream type (see
+            Notes).
 
         Notes
         -----
@@ -160,13 +161,15 @@ class RawXDF(BaseRaw):
           string). Numeric streams with a nominal sampling frequency of 0 Hz are
           converted to annotations (one per sample, the value is the description) unless
           they are listed in `stream_ids`, in which case they are loaded as discrete
-          channels (this requires `fs_new`).
+          channels (this requires `fs_new`). Use `marker_ids` to select which of these
+          streams are converted to annotations.
         - Numeric streams with a regular sampling frequency are loaded as channels.
           Their channels are either continuous or discrete. A channel is discrete if its
-          stream is listed in `discrete_ids`. If `discrete_ids` is `None`, a channel is
-          discrete if its stream type is one of "Marker(s)", "Event(s)", "Trigger(s)" or
-          "Stim" (case-insensitive) or if its channel type is "stim". Numeric streams
-          with 0 Hz loaded as channels are always discrete.
+          stream is listed in `discrete_ids` or if its channel type is "stim". If
+          `discrete_ids` is `None`, a stream is discrete if its stream type is one of
+          "Marker(s)", "Event(s)", "Trigger(s)" or "Stim" (case-insensitive, see also
+          `is_discrete_stream()`). Numeric streams with 0 Hz loaded as channels are
+          always discrete.
         - Discrete channels are never filtered and are resampled by holding the previous
           value, so that they only contain values from the original data. A
           `RuntimeWarning` is issued if value changes are lost due to downsampling.
@@ -214,6 +217,7 @@ class RawXDF(BaseRaw):
 
         streams, header = load_xdf(fname)
         streams = {stream["info"]["stream_id"]: stream for stream in streams}
+        infos = {i: _stream_info(stream) for i, stream in streams.items()}
 
         string_ids = [i for i in stream_ids if _is_string_stream(streams[i])]
         if string_ids:
@@ -228,6 +232,14 @@ class RawXDF(BaseRaw):
             raise ValueError(
                 f"Stream(s) {', '.join(map(str, both_ids))} must not be listed in both "
                 "`stream_ids` and `marker_ids`."
+            )
+
+        regular_ids = [i for i in marker_ids or [] if not is_marker_stream(infos[i])]
+        if regular_ids:
+            raise ValueError(
+                f"Stream(s) {', '.join(map(str, regular_ids))} cannot be loaded as "
+                "annotations, only string streams and numeric streams with a nominal "
+                "sampling frequency of 0 Hz can (see `stream_ids`)."
             )
 
         if fs_new is None and _stream_srate(streams[stream_ids[0]]) == 0:
@@ -340,12 +352,9 @@ class RawXDF(BaseRaw):
 
         # convert string streams and irregular numeric streams to annotations
         for stream_id, stream in streams.items():
-            if stream_id in stream_ids or not _is_marker_stream(stream):
+            if stream_id in stream_ids or not is_marker_stream(infos[stream_id]):
                 continue
-            srate = _stream_srate(stream)
-            # classic marker streams (srate=0) respect the user's marker selection;
-            # regular-rate string streams are always converted automatically
-            if srate == 0 and marker_ids is not None and stream_id not in marker_ids:
+            if marker_ids is not None and stream_id not in marker_ids:
                 continue
             prefix = f"{stream_id}-" if prefix_markers else ""
             onsets_list, descriptions_list = [], []
@@ -635,7 +644,7 @@ def read_raw_xdf(
         the available numeric stream IDs. Use `pyxdf.resolve_streams(fname)` to list
         available streams. String streams cannot be loaded as channels.
     marker_ids : list[int] | None
-        IDs of irregular marker streams (string or numeric streams with a nominal
+        IDs of marker streams (string streams and numeric streams with a nominal
         sampling frequency of 0 Hz) to load as annotations. If `None`, load all marker
         streams that are not listed in `stream_ids`.
     prefix_markers : bool
@@ -651,8 +660,8 @@ def read_raw_xdf(
         specified.
     discrete_ids : list[int] | None
         IDs of streams whose channels contain discrete values (such as trigger codes).
-        If `None`, discrete streams are detected automatically. See `RawXDF` for details
-        on how different stream types are handled.
+        If `None`, discrete streams are detected from their stream type. See `RawXDF`
+        for details on how different stream types are handled.
 
     Returns
     -------
@@ -684,19 +693,66 @@ def _is_string_stream(stream):
     return stream["info"]["channel_format"][0] == "string"
 
 
-def _is_marker_stream(stream):
-    """Return whether a stream is converted to annotations by default."""
-    return _is_string_stream(stream) or _stream_srate(stream) == 0
+def _stream_info(stream):
+    """Return the information of a stream from `load_xdf()` like `resolve_streams()`."""
+    info = stream["info"]
+    return {
+        "stream_id": info["stream_id"],
+        "type": (info.get("type") or [None])[0],
+        "channel_format": info["channel_format"][0],
+        "nominal_srate": float(info["nominal_srate"][0]),
+    }
 
 
 def _stream_srate(stream):
     return float(stream["info"]["nominal_srate"][0])
 
 
-def _stream_type(stream):
-    """Return the stream type in lower case (empty if missing)."""
-    stream_type = stream["info"].get("type") or [None]
-    return str(stream_type[0] or "").strip().lower()
+def is_marker_stream(stream):
+    """Return whether a stream is a marker stream.
+
+    Marker streams are converted to annotations by default, and only marker streams can
+    be listed in `marker_ids`.
+
+    Parameters
+    ----------
+    stream : dict
+        Stream information as returned by `resolve_streams(fname)`.
+
+    Returns
+    -------
+    bool
+        Whether the stream is a string stream (any sampling frequency) or a numeric
+        stream with a nominal sampling frequency of 0 Hz. String streams are always
+        converted to annotations, whereas numeric streams with 0 Hz can also be loaded
+        as channels by listing them in `stream_ids`.
+    """
+    return stream["channel_format"] == "string" or float(stream["nominal_srate"]) == 0
+
+
+def is_discrete_stream(stream):
+    """Return whether a numeric stream is loaded as discrete channels by default.
+
+    Parameters
+    ----------
+    stream : dict
+        Stream information as returned by `resolve_streams(fname)`.
+
+    Returns
+    -------
+    bool
+        Whether the channels of the stream are discrete when the stream is loaded as
+        channels and `discrete_ids` is `None`. This is the case for numeric streams with
+        a nominal sampling frequency of 0 Hz and for numeric streams whose type is one
+        of "Marker(s)", "Event(s)", "Trigger(s)" or "Stim" (case-insensitive). String
+        streams cannot be loaded as channels and are never discrete. Channels with the
+        type "stim" are always discrete, but this cannot be determined from the stream
+        information.
+    """
+    if stream["channel_format"] == "string":
+        return False
+    stream_type = str(stream["type"] or "").strip().lower()
+    return float(stream["nominal_srate"]) == 0 or stream_type in _EVENT_STREAM_TYPES
 
 
 def _discrete_channels(stream, types, discrete_ids):
@@ -709,7 +765,7 @@ def _discrete_channels(stream, types, discrete_ids):
     types : list[str | None]
         Channel types from the stream description (`None` if not specified).
     discrete_ids : list[int] | None
-        IDs of discrete streams, or `None` to detect them automatically.
+        IDs of discrete streams, or `None` to detect them from the stream type.
 
     Returns
     -------
@@ -718,11 +774,11 @@ def _discrete_channels(stream, types, discrete_ids):
     """
     if _stream_srate(stream) == 0:  # irregular values can only be held
         return [True] * len(types)
-    if discrete_ids is not None:
-        return [stream["info"]["stream_id"] in discrete_ids] * len(types)
-    if _stream_type(stream) in _EVENT_STREAM_TYPES:
-        return [True] * len(types)
-    return [t == "stim" for t in types]
+    if discrete_ids is None:
+        discrete = is_discrete_stream(_stream_info(stream))
+    else:
+        discrete = stream["info"]["stream_id"] in discrete_ids
+    return [discrete or t == "stim" for t in types]
 
 
 def get_xml(fname):
