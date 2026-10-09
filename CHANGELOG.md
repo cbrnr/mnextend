@@ -4,6 +4,7 @@
 
 ### 🔧 Fixed
 - Fix resampling of XDF trigger streams, which are now loaded as discrete stim channels (resampled without filtering by holding the previous value) instead of being filtered like signals ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Fix resampling of XDF streams dropping the last sample, which also lost the last value of irregular streams loaded as discrete channels (the resampled data can therefore be one sample longer than before) ([#17](https://github.com/cbrnr/mnextend/pull/17) by [Clemens Brunner](https://github.com/cbrnr))
 
 ### 🌀 Changed
 - Deprecate `stream_ids` and `marker_ids` in `read_raw_xdf()` in favor of `streams` (they will be removed in MNEXTEND 0.6.0) ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
