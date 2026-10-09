@@ -443,6 +443,21 @@ def test_all_streams(monkeypatch, tmp_path):
     assert list(raw.annotations.description) == ["start", "stop"]
 
 
+def test_channel_order(monkeypatch, tmp_path):
+    """Test that channels are ordered by stream ID regardless of the selection."""
+    eeg = _make_stream(["NA"], np.ones((200, 1)), stream_id=3, types=["eeg"])
+    data = _trigger_data(200, {50: (3, 7)})
+    trigger = _make_stream(["NA"], data, stream_id=1, stream_type="Trigger")
+    xdf_streams = [eeg, trigger]  # file order differs from stream ID order
+    raws = [
+        _read_streams(monkeypatch, tmp_path, xdf_streams, streams, fs_new=100)
+        for streams in (None, [3, 1], {3: "c", 1: "d"})
+    ]
+    for raw in raws:
+        assert raw.ch_names == ["s1ch0", "s3ch0"]
+        np.testing.assert_array_equal(raw.get_data(), raws[0].get_data())
+
+
 def test_deprecated_ids(monkeypatch, tmp_path):
     """Test the deprecated `stream_ids` and `marker_ids` arguments."""
     eeg = _make_stream(["NA"], np.ones((200, 1)), types=["eeg"])

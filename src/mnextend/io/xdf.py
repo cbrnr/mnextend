@@ -147,6 +147,7 @@ class RawXDF(BaseRaw):
             which can be "continuous" ("c"), "discrete" ("d"), or "annotations" ("a").
             If `None`, all streams containing samples are loaded in their default modes.
             At least one stream must be loaded as channels (continuous or discrete).
+            Channels are ordered by stream ID (regardless of the order in `streams`).
             Use `resolve_streams(fname)` to list available streams and
             `stream_modes()` to get the possible modes of a stream (see Notes).
         fs_new : float | None
@@ -245,8 +246,9 @@ class RawXDF(BaseRaw):
         if select_all:  # empty streams would only raise errors
             streams = [i for i, s in xdf_streams.items() if len(s["time_stamps"])]
         modes = _parse_streams(streams, infos)
-        channel_ids = [i for i, mode in modes.items() if mode != "annotations"]
-        annotation_ids = [i for i, mode in modes.items() if mode == "annotations"]
+        # sort by stream ID so that the channel order does not depend on the selection
+        channel_ids = sorted(i for i, mode in modes.items() if mode != "annotations")
+        annotation_ids = sorted(i for i, mode in modes.items() if mode == "annotations")
         streams = xdf_streams  # the selection is now stored in `modes`
 
         if not channel_ids:
@@ -667,8 +669,8 @@ def read_raw_xdf(
         Streams to load (all other streams are ignored). A list (or a single stream ID)
         loads each stream in its default mode. A dict maps stream IDs to modes, which
         can be "continuous" ("c"), "discrete" ("d"), or "annotations" ("a"). If `None`,
-        all streams containing samples are loaded in their default modes. See `RawXDF`
-        for details on how streams are loaded.
+        all streams containing samples are loaded in their default modes. Channels are
+        ordered by stream ID. See `RawXDF` for details on how streams are loaded.
     fs_new : float | None
         Target sampling frequency in Hz (required when loading multiple streams as
         channels or a stream with a nominal sampling frequency of 0 Hz). If only one
