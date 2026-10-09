@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import mne
 import numpy as np
 import scipy.signal
+from mne._fiff.pick import _picks_to_idx
 from mne.io import BaseRaw, get_channel_type_constants
 from mne.io.constants import FIFF
 from pyxdf import load_xdf, resolve_streams
@@ -208,6 +209,13 @@ class RawXDF(BaseRaw):
         "stim" channels contain 0 instead of NaN outside their stream's time range and
         in detected gaps.
 
+        Time spans in which data channels (those processed by `filter()` by default,
+        such as EEG) contain NaN are annotated as "BAD_ACQ_SKIP". This happens outside
+        the time range of their stream (for example, if another stream ends a few
+        samples later), in detected gaps, and wherever the original data contain NaN.
+        MNE skips these spans when filtering (where NaN would otherwise spread to
+        neighboring samples), and functions that reject bad segments also skip them.
+
         Resampling of continuous channels depends on whether gap detection is requested
         or not:
         - If `gap_threshold > 0`, uses linear interpolation to resample to the new
@@ -391,6 +399,15 @@ class RawXDF(BaseRaw):
         for ch, p in zip(self.info["chs"], known):
             if p is not None and p[1] is not None:
                 ch["unit"] = p[1]
+
+        # NaN in data channels spreads when filtering, so mark it as missing data, which
+        # MNE skips (data channels are those that `filter()` processes by default)
+        picks = _picks_to_idx(info, "data", exclude=(), allow_empty=True)
+        starts, stops = _true_runs(np.isnan(data[picks]).any(axis=0))
+        if len(starts):
+            self.annotations.append(
+                starts / fs, (stops - starts) / fs, ["BAD_ACQ_SKIP"] * len(starts)
+            )
 
         for stream_id in annotation_ids:
             stream = streams[stream_id]
@@ -675,6 +692,25 @@ def _snap_to_grid(timestamps, first_time, fs):
     nearest = np.round(positions)
     on_grid = np.abs(positions - nearest) < _GRID_TOLERANCE
     return np.where(on_grid, first_time + nearest / fs, timestamps)
+
+
+def _true_runs(mask):
+    """Find runs of consecutive `True` values in a boolean mask.
+
+    Parameters
+    ----------
+    mask : np.ndarray
+        One-dimensional boolean array.
+
+    Returns
+    -------
+    starts : np.ndarray
+        Index of the first value of each run.
+    stops : np.ndarray
+        Index after the last value of each run.
+    """
+    edges = np.diff(np.concatenate([[0], mask.astype(int), [0]]))
+    return np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
 
 
 def _hold_previous(stream_id, timestamps, x, time_new, fs_new):
