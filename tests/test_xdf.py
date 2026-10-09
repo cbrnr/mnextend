@@ -20,6 +20,15 @@ from mnextend.io.xdf import (
 )
 
 
+def test_public_api():
+    """Test that all public names can be imported."""
+    import pyxdf
+
+    for name in mnextend.io.xdf.__all__:
+        assert hasattr(mnextend.io.xdf, name)
+    assert mnextend.io.xdf.resolve_streams is pyxdf.resolve_streams
+
+
 @pytest.mark.parametrize(
     "unit, expected",
     [

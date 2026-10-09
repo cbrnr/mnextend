@@ -13,8 +13,17 @@ import numpy as np
 import scipy.signal
 from mne.io import BaseRaw, get_channel_type_constants
 from mne.io.constants import FIFF
-from pyxdf import load_xdf
+from pyxdf import load_xdf, resolve_streams
 from pyxdf.pyxdf import _read_varlen_int, open_xdf
+
+__all__ = [
+    "RawXDF",
+    "get_xml",
+    "list_chunks",
+    "read_raw_xdf",
+    "resolve_streams",  # re-exported from pyxdf
+    "stream_modes",
+]
 
 # maps base unit symbols (case-sensitive) to (FIFF unit code or None, accepts prefixes);
 # degrees are not converted to radians and MNE has no unit for them, so they keep the
