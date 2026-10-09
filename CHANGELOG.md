@@ -9,6 +9,7 @@
 ### 🌀 Changed
 - Convert numeric XDF streams with a nominal sampling frequency of 0 Hz to annotations unless they are listed in `stream_ids`, and raise a `ValueError` if `stream_ids` contains string streams ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 - Apply `marker_ids` to all XDF streams converted to annotations (including string streams with a regular sampling frequency), and raise a `ValueError` if `marker_ids` contains numeric streams with a regular sampling frequency ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Make all parameters of `read_raw_xdf()` except `fname` and `stream_ids` keyword-only and reorder them ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 
 ## [0.4.0] · 2026-10-07
 ### ✨ Added

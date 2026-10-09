@@ -117,12 +117,12 @@ class RawXDF(BaseRaw):
         self,
         fname,
         stream_ids,
+        *,
         marker_ids=None,
-        prefix_markers=False,
+        discrete_ids=None,
         fs_new=None,
         gap_threshold=0.0,
-        discrete_ids=None,
-        *args,
+        prefix_markers=False,
         **kwargs,
     ):
         """Read raw data from .xdf file.
@@ -131,15 +131,17 @@ class RawXDF(BaseRaw):
         ----------
         fname : str | Path
             File name to load.
-        stream_ids : int | list[int]
-            ID(s) of streams to load as channels. Use `pyxdf.resolve_streams(fname)` to
-            list available streams. String streams cannot be loaded as channels.
+        stream_ids : list[int]
+            IDs of streams to load as channels. Use `resolve_streams(fname)` to list
+            available streams. String streams cannot be loaded as channels.
         marker_ids : list[int] | None
             IDs of marker streams (string streams and numeric streams with a nominal
             sampling frequency of 0 Hz) to load as annotations. If `None`, load all
             marker streams that are not listed in `stream_ids`.
-        prefix_markers : bool
-            Whether to prefix marker streams with their corresponding stream ID.
+        discrete_ids : list[int] | None
+            IDs of streams whose channels contain discrete values (such as trigger
+            codes). If `None`, discrete streams are detected from their stream type (see
+            Notes).
         fs_new : float | None
             Target sampling frequency in Hz (required when reading multiple streams). If
             only one stream is provided, this can be `None`, in which case the stream's
@@ -149,10 +151,8 @@ class RawXDF(BaseRaw):
             samples as NaN. Set to 0.0 to disable gap detection. If `gap_threshold > 0`,
             linear interpolation is used instead of resampling, and `fs_new` must be
             specified.
-        discrete_ids : list[int] | None
-            IDs of streams whose channels contain discrete values (such as trigger
-            codes). If `None`, discrete streams are detected from their stream type (see
-            Notes).
+        prefix_markers : bool
+            Whether to prefix marker streams with their corresponding stream ID.
 
         Notes
         -----
@@ -343,7 +343,7 @@ class RawXDF(BaseRaw):
         known = [None if p is None or p is _UNKNOWN_UNIT else p for p in parsed]
         scale = np.array([1.0 if p is None else p[0] for p in known])
         data = (data * scale).T
-        super().__init__(preload=data, info=info, filenames=[fname], *args, **kwargs)
+        super().__init__(preload=data, info=info, filenames=[fname], **kwargs)
 
         # data are already in SI, so `unit_mul` stays at 0
         for ch, p in zip(self.info["chs"], known):
@@ -626,11 +626,12 @@ def _count_changes(x):
 def read_raw_xdf(
     fname,
     stream_ids=None,
+    *,
     marker_ids=None,
-    prefix_markers=False,
+    discrete_ids=None,
     fs_new=None,
     gap_threshold=0.0,
-    discrete_ids=None,
+    prefix_markers=False,
     **kwargs,
 ):
     """Read XDF file.
@@ -641,14 +642,16 @@ def read_raw_xdf(
         File name to load.
     stream_ids : int | list[int] | None
         ID(s) of streams to load as channels. If `None`, raises a `ValueError` listing
-        the available numeric stream IDs. Use `pyxdf.resolve_streams(fname)` to list
-        available streams. String streams cannot be loaded as channels.
+        the available numeric stream IDs. Use `resolve_streams(fname)` to list available
+        streams. String streams cannot be loaded as channels.
     marker_ids : list[int] | None
         IDs of marker streams (string streams and numeric streams with a nominal
         sampling frequency of 0 Hz) to load as annotations. If `None`, load all marker
         streams that are not listed in `stream_ids`.
-    prefix_markers : bool
-        Whether to prefix marker streams with their corresponding stream ID.
+    discrete_ids : list[int] | None
+        IDs of streams whose channels contain discrete values (such as trigger codes).
+        If `None`, discrete streams are detected from their stream type. See `RawXDF`
+        for details on how different stream types are handled.
     fs_new : float | None
         Target sampling frequency in Hz (required when reading multiple streams). If
         only one stream is provided, this can be `None`, in which case the stream's
@@ -658,10 +661,8 @@ def read_raw_xdf(
         samples as NaN. Set to 0.0 to disable gap detection. If `gap_threshold > 0`,
         linear interpolation is used instead of resampling, and `fs_new` must be
         specified.
-    discrete_ids : list[int] | None
-        IDs of streams whose channels contain discrete values (such as trigger codes).
-        If `None`, discrete streams are detected from their stream type. See `RawXDF`
-        for details on how different stream types are handled.
+    prefix_markers : bool
+        Whether to prefix marker streams with their corresponding stream ID.
 
     Returns
     -------
@@ -681,11 +682,11 @@ def read_raw_xdf(
     return RawXDF(
         fname,
         stream_ids,
-        marker_ids,
-        prefix_markers,
-        fs_new,
-        gap_threshold,
-        discrete_ids,
+        marker_ids=marker_ids,
+        discrete_ids=discrete_ids,
+        fs_new=fs_new,
+        gap_threshold=gap_threshold,
+        prefix_markers=prefix_markers,
     )
 
 
