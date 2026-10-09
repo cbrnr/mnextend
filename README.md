@@ -58,7 +58,7 @@ Each stream is loaded in one of three modes:
 - **Discrete** (`"discrete"` or `"d"`): channels with values such as trigger codes, which must not be changed. They are resampled without filtering by holding the previous value, so that they only contain values from the original data (a warning is issued if short pulses are lost due to downsampling). Discrete channels of streams with a regular sampling frequency get the channel type "stim" (unless the stream specifies a different type), so that `mne.find_events()` works out of the box.
 - **Annotations** (`"annotations"` or `"a"`): one annotation per non-empty string (string streams) or per sample with the value as its description (numeric streams).
 
-If `streams` is a list of stream IDs, each stream is loaded in its default mode. A dict maps stream IDs to modes instead. Which modes are possible depends on the stream:
+If `streams` is not specified, all streams containing samples are loaded in their default modes. If `streams` is a list of stream IDs, only these streams are loaded in their default modes. A dict maps stream IDs to modes instead. Which modes are possible depends on the stream:
 
 - String streams (such as stream 3) can only be converted to annotations.
 - Numeric streams with a nominal sampling frequency of 0 Hz (streams 4 and 5) are converted to annotations by default. They can also be loaded as discrete channels, which makes sense for irregular measurements like heart rate (each value is held until the next one arrives).
@@ -70,6 +70,10 @@ Here are some examples for the file above:
 
 ```python
 from mnextend import read_raw
+
+# all streams in their default modes (`fs_new` is required for multiple channel streams)
+# (1, 6: continuous; 2: discrete; 3, 4, 5: annotations)
+raw = read_raw("my_data.xdf", fs_new=500)
 
 # all streams except the TTL pulses in their default modes
 # (1: continuous; 2: discrete; 3, 4, 5: annotations; 6: not loaded)
@@ -88,7 +92,7 @@ raw = read_raw("my_data.xdf", streams={1: "c", 3: "a", 4: "a", 5: "d"}, fs_new=5
 raw = read_raw("my_data.xdf", streams={1: "c", 2: "d", 3: "a", 6: "d"}, fs_new=500)
 ```
 
-Calling `read_raw()` without `streams` raises an error that lists all streams with their possible modes. To get this information programmatically, use `stream_modes()`:
+If `streams` is not specified and several streams would be loaded as channels without `fs_new`, the error message lists all streams with their possible modes. To get this information programmatically, use `stream_modes()`:
 
 ```python
 from mnextend.io.xdf import resolve_streams, stream_modes

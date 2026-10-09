@@ -1,6 +1,6 @@
 ## [UNRELEASED] · YYYY-MM-DD
 ### ✨ Added
-- Add `streams` parameter to `read_raw_xdf()`, which selects the XDF streams to load and the mode for each stream (`"continuous"`, `"discrete"`, or `"annotations"`), and `stream_modes()` (via `mnextend.io.xdf`) to list the possible modes of a stream ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Add `streams` parameter to `read_raw_xdf()`, which selects the XDF streams to load (all streams containing samples by default) and the mode for each stream (`"continuous"`, `"discrete"`, or `"annotations"`), and `stream_modes()` (via `mnextend.io.xdf`) to list the possible modes of a stream ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 
 ### 🔧 Fixed
 - Fix resampling of XDF trigger streams, which are now loaded as discrete stim channels (resampled without filtering by holding the previous value) instead of being filtered like signals ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))

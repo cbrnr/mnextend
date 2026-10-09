@@ -13,7 +13,7 @@ import numpy as np
 import scipy.signal
 from mne.io import BaseRaw, get_channel_type_constants
 from mne.io.constants import FIFF
-from pyxdf import load_xdf, resolve_streams
+from pyxdf import load_xdf
 from pyxdf.pyxdf import _read_varlen_int, open_xdf
 
 # maps base unit symbols (case-sensitive) to (FIFF unit code or None, accepts prefixes);
@@ -141,10 +141,11 @@ class RawXDF(BaseRaw):
         ----------
         fname : str | Path
             File name to load.
-        streams : int | list[int] | dict[int, str]
+        streams : int | list[int] | dict[int, str] | None
             Streams to load (all other streams are ignored). A list (or a single stream
             ID) loads each stream in its default mode. A dict maps stream IDs to modes,
             which can be "continuous" ("c"), "discrete" ("d"), or "annotations" ("a").
+            If `None`, all streams containing samples are loaded in their default modes.
             At least one stream must be loaded as channels (continuous or discrete).
             Use `resolve_streams(fname)` to list available streams and
             `stream_modes()` to get the possible modes of a stream (see Notes).
@@ -222,9 +223,6 @@ class RawXDF(BaseRaw):
                 "Gap detection requires resampling to a regular time grid."
             )
 
-        if streams is None and stream_ids is None and marker_ids is None:
-            raise ValueError("Argument `streams` is required.")
-
         xdf_streams, header = load_xdf(fname)
         xdf_streams = {stream["info"]["stream_id"]: stream for stream in xdf_streams}
         infos = {i: _stream_info(stream) for i, stream in xdf_streams.items()}
@@ -243,6 +241,9 @@ class RawXDF(BaseRaw):
                 stacklevel=2,
             )
 
+        select_all = streams is None
+        if select_all:  # empty streams would only raise errors
+            streams = [i for i, s in xdf_streams.items() if len(s["time_stamps"])]
         modes = _parse_streams(streams, infos)
         channel_ids = [i for i, mode in modes.items() if mode != "annotations"]
         annotation_ids = [i for i, mode in modes.items() if mode == "annotations"]
@@ -255,10 +256,18 @@ class RawXDF(BaseRaw):
             )
 
         if len(channel_ids) > 1 and fs_new is None:
-            raise ValueError(
+            msg = (
                 "Argument `fs_new` is required when loading multiple streams as "
                 "channels."
             )
+            if select_all:
+                msg += (
+                    " All streams are loaded if `streams` is not specified, so specify "
+                    "`fs_new` or select streams with `streams`. Available streams and "
+                    "their possible modes (default first):\n"
+                    f"{_describe_streams(infos)}"
+                )
+            raise ValueError(msg)
 
         if fs_new is None and _stream_srate(streams[channel_ids[0]]) == 0:
             raise ValueError(
@@ -658,8 +667,8 @@ def read_raw_xdf(
         Streams to load (all other streams are ignored). A list (or a single stream ID)
         loads each stream in its default mode. A dict maps stream IDs to modes, which
         can be "continuous" ("c"), "discrete" ("d"), or "annotations" ("a"). If `None`,
-        raises a `ValueError` listing the available streams and their possible modes.
-        See `RawXDF` for details on how streams are loaded.
+        all streams containing samples are loaded in their default modes. See `RawXDF`
+        for details on how streams are loaded.
     fs_new : float | None
         Target sampling frequency in Hz (required when loading multiple streams as
         channels or a stream with a nominal sampling frequency of 0 Hz). If only one
@@ -684,15 +693,6 @@ def read_raw_xdf(
     RawXDF
         The raw data.
     """
-    if streams is None and stream_ids is None and marker_ids is None:
-        available = "\n".join(
-            f"  {s['stream_id']}: {s['name']} ({', '.join(stream_modes(s))})"
-            for s in resolve_streams(fname)
-        )
-        raise ValueError(
-            "Argument `streams` is required. Available streams (ID: name, possible "
-            f"modes with the default first):\n{available}"
-        )
     return RawXDF(
         fname,
         streams,
@@ -731,6 +731,14 @@ def stream_modes(stream):
     if str(stream["type"] or "").strip().lower() in _EVENT_STREAM_TYPES:
         return ["discrete", "continuous"]
     return ["continuous", "discrete"]
+
+
+def _describe_streams(infos):
+    """Return one line per stream with its ID, name, and possible modes."""
+    return "\n".join(
+        f"  {i}: {info['name']} ({', '.join(stream_modes(info))})"
+        for i, info in infos.items()
+    )
 
 
 def _parse_streams(streams, infos):

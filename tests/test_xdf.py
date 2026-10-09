@@ -417,15 +417,30 @@ def test_stim_channel_in_continuous_stream(monkeypatch, tmp_path):
     assert set(np.unique(raw.get_data(picks="stim"))) == {0, 7, 255}
 
 
-def test_read_raw_xdf_without_streams(monkeypatch):
-    """Test that the error message lists the available streams and their modes."""
-    infos = [
-        {**_info("float32", 500.0, "EEG"), "stream_id": 1, "name": "EEG"},
-        {**_info("string", 0.0, "Markers"), "stream_id": 2, "name": "Markers"},
-    ]
-    monkeypatch.setattr(mnextend.io.xdf, "resolve_streams", lambda fname: infos)
-    with pytest.raises(ValueError, match=r"1: EEG \(continuous, discrete\)\n  2: Mar"):
-        read_raw_xdf("test.xdf")
+def test_all_streams(monkeypatch, tmp_path):
+    """Test that all streams with samples are loaded if `streams` is not specified."""
+    eeg = _make_stream(["NA"], np.ones((200, 1)), types=["eeg"])
+    markers = _make_string_stream(2, ["start", "stop"], [0.5, 1.5])
+    empty = _make_stream(["NA"], np.zeros((0, 1)), stream_id=3, types=["eeg"])
+    raw = _read_streams(monkeypatch, tmp_path, [eeg, markers, empty])
+    assert raw.get_channel_types() == ["eeg"]
+    assert list(raw.annotations.description) == ["start", "stop"]
+    raw = read_raw_xdf(tmp_path / "test.xdf")  # uses the same patched `load_xdf`
+    assert raw.get_channel_types() == ["eeg"]
+
+    with pytest.raises(ValueError, match="Stream 3 contains no samples"):
+        _read_streams(monkeypatch, tmp_path, [eeg, markers, empty], [1, 3], fs_new=100)
+
+    data = _trigger_data(200, {50: (3, 7)})
+    trigger = _make_stream(
+        ["NA"], data, stream_id=4, stream_type="Trigger", types=[None]
+    )
+    streams = [eeg, markers, empty, trigger]
+    with pytest.raises(ValueError, match=r"All streams.*\n  1: test \(continuous, di"):
+        _read_streams(monkeypatch, tmp_path, streams)
+    raw = _read_streams(monkeypatch, tmp_path, streams, fs_new=100)
+    assert raw.get_channel_types() == ["eeg", "stim"]
+    assert list(raw.annotations.description) == ["start", "stop"]
 
 
 def test_deprecated_ids(monkeypatch, tmp_path):
