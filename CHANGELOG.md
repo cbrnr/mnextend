@@ -1,15 +1,15 @@
 ## [UNRELEASED] · YYYY-MM-DD
 ### ✨ Added
-- Add `discrete_ids` parameter to `read_raw_xdf()` to specify streams containing discrete values such as trigger codes, which are resampled without filtering by holding the previous value ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
-- Add `is_marker_stream()` and `is_discrete_stream()` (via `mnextend.io.xdf`) to determine whether an XDF stream listed by `resolve_streams()` is converted to annotations or loaded as discrete channels by default ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Add `streams` parameter to `read_raw_xdf()`, which selects the XDF streams to load and the mode for each stream (`"continuous"`, `"discrete"`, or `"annotations"`), and `stream_modes()` (via `mnextend.io.xdf`) to list the possible modes of a stream ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 
 ### 🔧 Fixed
-- Fix resampling of XDF trigger streams (detected by their stream type or stim channel type), which are now loaded as stim channels without filtering artifacts ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Fix resampling of XDF trigger streams, which are now loaded as discrete stim channels (resampled without filtering by holding the previous value) instead of being filtered like signals ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 
 ### 🌀 Changed
-- Convert numeric XDF streams with a nominal sampling frequency of 0 Hz to annotations unless they are listed in `stream_ids`, and raise a `ValueError` if `stream_ids` contains string streams ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
-- Apply `marker_ids` to all XDF streams converted to annotations (including string streams with a regular sampling frequency), and raise a `ValueError` if `marker_ids` contains numeric streams with a regular sampling frequency ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
-- Make all parameters of `read_raw_xdf()` except `fname` and `stream_ids` keyword-only and reorder them ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Deprecate `stream_ids` and `marker_ids` in `read_raw_xdf()` in favor of `streams` (they will be removed in MNEXTEND 0.6.0) ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Convert numeric XDF streams with a nominal sampling frequency of 0 Hz to annotations by default, or load them as discrete channels (instead of continuous channels) ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Make all parameters of `read_raw_xdf()` except `fname` and `streams` keyword-only ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
+- Raise a `ValueError` for XDF stream IDs that do not exist in the file (instead of a `KeyError`) ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 
 ## [0.4.0] · 2026-10-07
 ### ✨ Added

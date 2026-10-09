@@ -13,10 +13,10 @@ import mnextend.io.xdf
 from mnextend.io.xdf import (
     _UNKNOWN_UNIT,
     RawXDF,
-    _discrete_channels,
+    _parse_streams,
     _parse_unit,
-    is_discrete_stream,
-    is_marker_stream,
+    read_raw_xdf,
+    stream_modes,
 )
 
 
@@ -126,13 +126,13 @@ def _make_string_stream(stream_id, markers, time_stamps, srate=0):
     }
 
 
-def _read_streams(monkeypatch, tmp_path, streams, stream_ids, **kwargs):
+def _read_streams(monkeypatch, tmp_path, xdf_streams, streams=None, **kwargs):
     fname = tmp_path / "test.xdf"
     fname.touch()  # MNE checks that the file exists
     monkeypatch.setattr(
-        mnextend.io.xdf, "load_xdf", lambda fname: (streams, {"info": {}})
+        mnextend.io.xdf, "load_xdf", lambda fname: (xdf_streams, {"info": {}})
     )
-    return RawXDF(fname, stream_ids, **kwargs)
+    return RawXDF(fname, streams, **kwargs)
 
 
 def _read(monkeypatch, tmp_path, units, data):
@@ -189,53 +189,59 @@ def test_units_warning_deduplicated(monkeypatch, tmp_path):
     assert len(record) == 1
 
 
-@pytest.mark.parametrize(
-    "dtype, srate, stream_type, types, discrete_ids, expected",
-    [
-        (np.int16, 100, "EEG", ["eeg"], None, [False]),  # raw ADC counts
-        (np.int32, 100, "Trigger", [None], None, [True]),
-        (np.float32, 100, " Markers ", [None], None, [True]),
-        (np.float32, 100, "EEG", ["eeg", "stim"], None, [False, True]),
-        (np.int32, 100, "TTL", [None], [1], [True]),
-        (np.int32, 100, "TTL", [None], [2], [False]),
-        (np.float32, 100, "Trigger", ["eeg"], [], [False]),
-        (np.float32, 100, "Trigger", ["stim"], [], [True]),  # stim is always discrete
-        (np.float32, 100, "EEG", ["eeg", "stim"], [2], [False, True]),
-        (np.float32, 0, "HeartRate", [None], [], [True]),
-    ],
-)
-def test_discrete_channels(dtype, srate, stream_type, types, discrete_ids, expected):
-    """Test detection of discrete channels."""
-    data = np.zeros((10, len(types)), dtype=dtype)
-    stream = _make_stream(
-        ["NA"] * len(types), data, srate=srate, stream_type=stream_type, types=types
-    )
-    assert _discrete_channels(stream, types, discrete_ids) == expected
-
-
-@pytest.mark.parametrize(
-    "channel_format, srate, stream_type, marker, discrete",
-    [
-        ("float32", 100.0, "EEG", False, False),
-        ("int16", 100.0, None, False, False),  # raw ADC counts
-        ("int32", 1000.0, " Trigger ", False, True),
-        ("float32", 100.0, "markers", False, True),
-        ("float32", 0.0, "HeartRate", True, True),
-        ("string", 0.0, "Markers", True, False),
-        ("string", 5000.0, "sampledMarkers", True, False),
-    ],
-)
-def test_stream_classification(channel_format, srate, stream_type, marker, discrete):
-    """Test classification of streams from `resolve_streams()` information."""
-    stream = {
+def _info(channel_format, srate, stream_type):
+    """Create stream information like `resolve_streams()`."""
+    return {
         "stream_id": 1,
+        "name": "test",
         "type": stream_type,
         "channel_count": 1,
         "channel_format": channel_format,
         "nominal_srate": srate,
     }
-    assert is_marker_stream(stream) == marker
-    assert is_discrete_stream(stream) == discrete
+
+
+@pytest.mark.parametrize(
+    "channel_format, srate, stream_type, expected",
+    [
+        ("float32", 100.0, "EEG", ["continuous", "discrete"]),
+        ("int16", 100.0, None, ["continuous", "discrete"]),  # raw ADC counts
+        ("int32", 1000.0, " Trigger ", ["discrete", "continuous"]),
+        ("float32", 100.0, "markers", ["discrete", "continuous"]),
+        ("float32", 0.0, "HeartRate", ["annotations", "discrete"]),
+        ("string", 0.0, "Markers", ["annotations"]),
+        ("string", 5000.0, "sampledMarkers", ["annotations"]),
+    ],
+)
+def test_stream_modes(channel_format, srate, stream_type, expected):
+    """Test possible modes of streams from `resolve_streams()` information."""
+    assert stream_modes(_info(channel_format, srate, stream_type)) == expected
+
+
+def test_parse_streams():
+    """Test parsing of the `streams` argument."""
+    infos = {
+        1: _info("float32", 500.0, "EEG"),
+        2: _info("int32", 1000.0, "Trigger"),
+        3: _info("string", 0.0, "Markers"),
+        4: _info("float32", 0.0, "HeartRate"),
+    }
+    defaults = {1: "continuous", 2: "discrete", 3: "annotations", 4: "annotations"}
+    assert _parse_streams([1, 2, 3, 4], infos) == defaults
+    assert _parse_streams(2, infos) == {2: "discrete"}
+    assert _parse_streams({2: "c", 4: "D", 3: "annotations"}, infos) == {
+        2: "continuous",
+        4: "discrete",
+        3: "annotations",
+    }
+    with pytest.raises(ValueError, match=r"Stream\(s\) 5 not found.*: 1, 2, 3, 4\)"):
+        _parse_streams([1, 5], infos)
+    with pytest.raises(ValueError, match="Invalid mode 'x' for stream 1"):
+        _parse_streams({1: "x"}, infos)
+    with pytest.raises(ValueError, match=r"3 cannot be loaded as continuous \(possi"):
+        _parse_streams({3: "c"}, infos)
+    with pytest.raises(ValueError, match="4 cannot be loaded as continuous"):
+        _parse_streams({4: "continuous"}, infos)
 
 
 def test_int_trigger_stream(monkeypatch, tmp_path):
@@ -315,11 +321,11 @@ def test_numeric_marker_stream_annotations(monkeypatch, tmp_path):
         time_stamps=np.array([0.7, 0.9]),
     )
     streams = [eeg, codes, values]
-    raw = _read_streams(monkeypatch, tmp_path, streams, [1], prefix_markers=True)
+    raw = _read_streams(monkeypatch, tmp_path, streams, [1, 2, 3], prefix_markers=True)
     np.testing.assert_allclose(raw.annotations.onset, [0.5, 0.7, 1.2])
     assert list(raw.annotations.description) == ["2-3", "3-1.5", "2-5"]
 
-    raw = _read_streams(monkeypatch, tmp_path, streams, [1], marker_ids=[3])
+    raw = _read_streams(monkeypatch, tmp_path, streams, [1, 3])
     assert list(raw.annotations.description) == ["1.5"]
 
 
@@ -335,7 +341,9 @@ def test_numeric_marker_stream_as_channel(monkeypatch, tmp_path):
         types=[None],
         time_stamps=np.array([0.5, 0.8, 1.0]),
     )
-    raw = _read_streams(monkeypatch, tmp_path, [eeg, heart_rate], [1, 2], fs_new=100)
+    raw = _read_streams(
+        monkeypatch, tmp_path, [eeg, heart_rate], {1: "c", 2: "d"}, fs_new=100
+    )
     assert raw.get_channel_types() == ["eeg", "misc"]
     assert len(raw.annotations) == 0
     data = raw.get_data(picks="misc")[0]
@@ -344,40 +352,115 @@ def test_numeric_marker_stream_as_channel(monkeypatch, tmp_path):
     np.testing.assert_array_equal(data[80:100], 65)
 
     with pytest.raises(ValueError, match="`fs_new` is required"):
-        _read_streams(monkeypatch, tmp_path, [heart_rate], [2])
-    with pytest.raises(ValueError, match="both `stream_ids` and `marker_ids`"):
-        _read_streams(
-            monkeypatch, tmp_path, [eeg, heart_rate], [1, 2], fs_new=100, marker_ids=[2]
-        )
+        _read_streams(monkeypatch, tmp_path, [heart_rate], {2: "d"})
 
 
-def test_string_stream_as_channel(monkeypatch, tmp_path):
-    """Test that string streams cannot be loaded as channels."""
+def test_string_stream_modes(monkeypatch, tmp_path):
+    """Test that string streams can only be converted to annotations."""
     eeg = _make_stream(["NA"], np.ones((200, 1)), types=["eeg"])
     markers = _make_string_stream(2, ["start", "", "stop"], [0.5, 0.7, 1.5])
-    with pytest.raises(ValueError, match=r"String stream\(s\) 2 cannot be loaded"):
-        _read_streams(monkeypatch, tmp_path, [eeg, markers], [1, 2], fs_new=100)
+    with pytest.raises(ValueError, match="2 cannot be loaded as discrete"):
+        _read_streams(monkeypatch, tmp_path, [eeg, markers], {1: "c", 2: "d"})
 
-    raw = _read_streams(monkeypatch, tmp_path, [eeg, markers], [1])
+    raw = _read_streams(monkeypatch, tmp_path, [eeg, markers], [1, 2])
     np.testing.assert_allclose(raw.annotations.onset, [0.5, 1.5])
     assert list(raw.annotations.description) == ["start", "stop"]
 
 
-def test_marker_ids(monkeypatch, tmp_path):
-    """Test that `marker_ids` selects all streams converted to annotations."""
+def test_only_listed_streams(monkeypatch, tmp_path):
+    """Test that only streams listed in `streams` are loaded."""
     eeg = _make_stream(["NA"], np.ones((200, 1)), types=["eeg"])
     markers = _make_string_stream(2, ["start", "stop"], [0.5, 1.5])
     sampled = _make_string_stream(3, ["", "a", "", "b"], [0, 0.2, 0.4, 0.6], srate=5)
     streams = [eeg, markers, sampled]
-    raw = _read_streams(monkeypatch, tmp_path, streams, [1])
+    raw = _read_streams(monkeypatch, tmp_path, streams, [1, 2, 3])
     assert list(raw.annotations.description) == ["a", "start", "b", "stop"]
 
-    raw = _read_streams(monkeypatch, tmp_path, streams, [1], marker_ids=[2])
+    raw = _read_streams(monkeypatch, tmp_path, streams, [1, 2])
     assert list(raw.annotations.description) == ["start", "stop"]
 
-    raw = _read_streams(monkeypatch, tmp_path, streams, [1], marker_ids=[])
+    raw = _read_streams(monkeypatch, tmp_path, streams, [1])
     assert len(raw.annotations) == 0
 
-    trigger = _make_stream(["NA"], np.zeros((200, 1)), stream_id=4, types=["stim"])
-    with pytest.raises(ValueError, match=r"Stream\(s\) 4 cannot be loaded as anno"):
-        _read_streams(monkeypatch, tmp_path, [eeg, trigger], [1], marker_ids=[4])
+    with pytest.raises(ValueError, match="At least one stream must be loaded as chan"):
+        _read_streams(monkeypatch, tmp_path, streams, [2, 3])
+
+
+@pytest.mark.parametrize(
+    "stream_type, mode, ch_type, values",
+    [
+        ("TTL", "d", "stim", {0, 7, 255}),  # unrecognized type, explicitly discrete
+        ("Trigger", None, "stim", {0, 7, 255}),  # recognized type
+        ("Trigger", "c", "misc", None),  # analog signal with a misleading type
+    ],
+)
+def test_explicit_modes(monkeypatch, tmp_path, stream_type, mode, ch_type, values):
+    """Test that explicit modes override the detection based on the stream type."""
+    data = _trigger_data(200, {50: (4, 7), 120: (4, 255)})
+    stream = _make_stream(["NA"], data, stream_type=stream_type, types=[None])
+    raw = _read_streams(monkeypatch, tmp_path, [stream], {1: mode}, fs_new=50)
+    assert raw.get_channel_types() == [ch_type]
+    if values is None:  # filtered and resampled, so the codes are not preserved
+        assert not set(np.unique(raw.get_data())) <= {0, 7, 255}
+    else:
+        assert set(np.unique(raw.get_data())) == values
+
+
+def test_stim_channel_in_continuous_stream(monkeypatch, tmp_path):
+    """Test that stim channels are discrete even in continuous streams."""
+    data = np.zeros((200, 2))
+    data[:, 0] = np.sin(np.arange(200) / 10)
+    data[:, 1] = _trigger_data(200, {50: (4, 7), 120: (4, 255)})[:, 0]
+    stream = _make_stream(["NA", "NA"], data, types=["eeg", "stim"])
+    raw = _read_streams(monkeypatch, tmp_path, [stream], {1: "c"}, fs_new=50)
+    assert raw.get_channel_types() == ["eeg", "stim"]
+    assert set(np.unique(raw.get_data(picks="stim"))) == {0, 7, 255}
+
+
+def test_read_raw_xdf_without_streams(monkeypatch):
+    """Test that the error message lists the available streams and their modes."""
+    infos = [
+        {**_info("float32", 500.0, "EEG"), "stream_id": 1, "name": "EEG"},
+        {**_info("string", 0.0, "Markers"), "stream_id": 2, "name": "Markers"},
+    ]
+    monkeypatch.setattr(mnextend.io.xdf, "resolve_streams", lambda fname: infos)
+    with pytest.raises(ValueError, match=r"1: EEG \(continuous, discrete\)\n  2: Mar"):
+        read_raw_xdf("test.xdf")
+
+
+def test_deprecated_ids(monkeypatch, tmp_path):
+    """Test the deprecated `stream_ids` and `marker_ids` arguments."""
+    eeg = _make_stream(["NA"], np.ones((200, 1)), types=["eeg"])
+    heart_rate = _make_stream(
+        ["NA"],
+        np.array([[60.0], [65.0]]),
+        stream_id=2,
+        srate=0,
+        types=[None],
+        time_stamps=np.array([0.5, 1.0]),
+    )
+    markers = _make_string_stream(3, ["start", "stop"], [0.2, 1.5])
+    streams = [eeg, heart_rate, markers]
+    with pytest.warns(FutureWarning, match="`stream_ids` and `marker_ids` are depre"):
+        raw = _read_streams(monkeypatch, tmp_path, streams, stream_ids=[1])
+    assert raw.get_channel_types() == ["eeg"]
+    assert list(raw.annotations.description) == ["start", "60.0", "65.0", "stop"]
+
+    with pytest.warns(FutureWarning):
+        raw = _read_streams(
+            monkeypatch, tmp_path, streams, stream_ids=1, marker_ids=[3]
+        )
+    assert list(raw.annotations.description) == ["start", "stop"]
+
+    # irregular numeric streams in `stream_ids` are loaded as discrete channels
+    with pytest.warns(FutureWarning):
+        raw = _read_streams(
+            monkeypatch, tmp_path, streams, stream_ids=[1, 2], fs_new=100
+        )
+    assert raw.get_channel_types() == ["eeg", "misc"]
+    assert list(raw.annotations.description) == ["start", "stop"]
+
+    with pytest.raises(ValueError, match="both `stream_ids` and `marker_ids`"):
+        _read_streams(monkeypatch, tmp_path, streams, stream_ids=[1, 3], marker_ids=[3])
+    with pytest.raises(ValueError, match="cannot be combined with `streams`"):
+        _read_streams(monkeypatch, tmp_path, streams, [1], stream_ids=[1])

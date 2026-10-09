@@ -109,6 +109,16 @@ _EVENT_STREAM_TYPES = {
     "stim",
 }
 
+# accepted modes in `streams` (full names and abbreviations)
+_MODES = {
+    "continuous": "continuous",
+    "c": "continuous",
+    "discrete": "discrete",
+    "d": "discrete",
+    "annotations": "annotations",
+    "a": "annotations",
+}
+
 
 class RawXDF(BaseRaw):
     """Raw data from .xdf file."""
@@ -116,13 +126,13 @@ class RawXDF(BaseRaw):
     def __init__(
         self,
         fname,
-        stream_ids,
+        streams=None,
         *,
-        marker_ids=None,
-        discrete_ids=None,
         fs_new=None,
         gap_threshold=0.0,
         prefix_markers=False,
+        stream_ids=None,
+        marker_ids=None,
         **kwargs,
     ):
         """Read raw data from .xdf file.
@@ -131,52 +141,57 @@ class RawXDF(BaseRaw):
         ----------
         fname : str | Path
             File name to load.
-        stream_ids : list[int]
-            IDs of streams to load as channels. Use `resolve_streams(fname)` to list
-            available streams. String streams cannot be loaded as channels.
-        marker_ids : list[int] | None
-            IDs of marker streams (string streams and numeric streams with a nominal
-            sampling frequency of 0 Hz) to load as annotations. If `None`, load all
-            marker streams that are not listed in `stream_ids`.
-        discrete_ids : list[int] | None
-            IDs of streams whose channels contain discrete values (such as trigger
-            codes). If `None`, discrete streams are detected from their stream type (see
-            Notes).
+        streams : int | list[int] | dict[int, str]
+            Streams to load (all other streams are ignored). A list (or a single stream
+            ID) loads each stream in its default mode. A dict maps stream IDs to modes,
+            which can be "continuous" ("c"), "discrete" ("d"), or "annotations" ("a").
+            At least one stream must be loaded as channels (continuous or discrete).
+            Use `resolve_streams(fname)` to list available streams and
+            `stream_modes()` to get the possible modes of a stream (see Notes).
         fs_new : float | None
-            Target sampling frequency in Hz (required when reading multiple streams). If
-            only one stream is provided, this can be `None`, in which case the stream's
-            original sampling rate is used.
+            Target sampling frequency in Hz (required when loading multiple streams as
+            channels or a stream with a nominal sampling frequency of 0 Hz). If only
+            one stream is loaded as channels, this can be `None`, in which case the
+            stream's original sampling rate is used.
         gap_threshold : float
             Detect gaps in timestamps larger than this value (in seconds) and mark those
             samples as NaN. Set to 0.0 to disable gap detection. If `gap_threshold > 0`,
             linear interpolation is used instead of resampling, and `fs_new` must be
             specified.
         prefix_markers : bool
-            Whether to prefix marker streams with their corresponding stream ID.
+            Whether to prefix annotations with the ID of their stream.
+        stream_ids : int | list[int] | None
+            Deprecated, use `streams` instead. IDs of streams to load as channels.
+        marker_ids : list[int] | None
+            Deprecated, use `streams` instead. IDs of string streams and numeric
+            streams with 0 Hz to convert to annotations (`None` converts all such
+            streams that are not listed in `stream_ids`).
 
         Notes
         -----
-        Streams are handled as follows:
-        - String streams are always converted to annotations (one per non-empty
-          string). Numeric streams with a nominal sampling frequency of 0 Hz are
-          converted to annotations (one per sample, the value is the description) unless
-          they are listed in `stream_ids`, in which case they are loaded as discrete
-          channels (this requires `fs_new`). Use `marker_ids` to select which of these
-          streams are converted to annotations.
-        - Numeric streams with a regular sampling frequency are loaded as channels.
-          Their channels are either continuous or discrete. A channel is discrete if its
-          stream is listed in `discrete_ids` or if its channel type is "stim". If
-          `discrete_ids` is `None`, a stream is discrete if its stream type is one of
-          "Marker(s)", "Event(s)", "Trigger(s)" or "Stim" (case-insensitive, see also
-          `is_discrete_stream()`). Numeric streams with 0 Hz loaded as channels are
-          always discrete.
-        - Discrete channels are never filtered and are resampled by holding the previous
-          value, so that they only contain values from the original data. A
-          `RuntimeWarning` is issued if value changes are lost due to downsampling.
-          Discrete channels of regular-rate streams get the channel type "stim" unless
+        Each stream is loaded in one of the following modes:
+        - "continuous": channels containing signals (such as EEG), which are filtered
+          and resampled as usual.
+        - "discrete": channels containing discrete values (such as trigger codes),
+          which are never filtered and are resampled by holding the previous value, so
+          that they only contain values from the original data. A `RuntimeWarning` is
+          issued if value changes are lost due to downsampling. Discrete channels of
+          streams with a regular sampling frequency get the channel type "stim" unless
           the stream specifies a valid type.
-        - "stim" channels contain 0 instead of NaN outside their stream's time range and
-          in detected gaps.
+        - "annotations": one annotation per non-empty string (string streams) or per
+          sample (numeric streams, the value is the description).
+
+        Which modes are possible depends on the stream (the first one is the default):
+        - String streams: "annotations".
+        - Numeric streams with a nominal sampling frequency of 0 Hz: "annotations",
+          "discrete".
+        - Numeric streams with a regular sampling frequency: "discrete", "continuous"
+          if the stream type is one of "Marker(s)", "Event(s)", "Trigger(s)", or "Stim"
+          (case-insensitive), otherwise "continuous", "discrete".
+
+        Channels with the type "stim" are always discrete, even in continuous streams.
+        "stim" channels contain 0 instead of NaN outside their stream's time range and
+        in detected gaps.
 
         Resampling of continuous channels depends on whether gap detection is requested
         or not:
@@ -196,14 +211,6 @@ class RawXDF(BaseRaw):
         a unit because MNE has no unit for degrees. A `RuntimeWarning` lists all unit
         strings that are not recognized (the corresponding channels are not scaled).
         """
-        if len(stream_ids) == 0:
-            raise ValueError("Argument `stream_ids` must not be empty.")
-
-        if len(stream_ids) > 1 and fs_new is None:
-            raise ValueError(
-                "Argument `fs_new` is required when reading multiple streams."
-            )
-
         if gap_threshold < 0:
             raise ValueError(
                 f"Argument `gap_threshold` must be non-negative, got {gap_threshold}."
@@ -215,42 +222,53 @@ class RawXDF(BaseRaw):
                 "Gap detection requires resampling to a regular time grid."
             )
 
-        streams, header = load_xdf(fname)
-        streams = {stream["info"]["stream_id"]: stream for stream in streams}
-        infos = {i: _stream_info(stream) for i, stream in streams.items()}
+        if streams is None and stream_ids is None and marker_ids is None:
+            raise ValueError("Argument `streams` is required.")
 
-        string_ids = [i for i in stream_ids if _is_string_stream(streams[i])]
-        if string_ids:
-            raise ValueError(
-                f"String stream(s) {', '.join(map(str, string_ids))} cannot be loaded "
-                "as channels, string streams are converted to annotations (see "
-                "`marker_ids`)."
+        xdf_streams, header = load_xdf(fname)
+        xdf_streams = {stream["info"]["stream_id"]: stream for stream in xdf_streams}
+        infos = {i: _stream_info(stream) for i, stream in xdf_streams.items()}
+
+        if stream_ids is not None or marker_ids is not None:
+            if streams is not None:
+                raise ValueError(
+                    "Arguments `stream_ids` and `marker_ids` cannot be combined with "
+                    "`streams`."
+                )
+            streams = _streams_from_ids(stream_ids, marker_ids, infos)
+            warnings.warn(
+                "Arguments `stream_ids` and `marker_ids` are deprecated and will be "
+                "removed in MNEXTEND 0.6.0, use `streams` instead.",
+                FutureWarning,
+                stacklevel=2,
             )
 
-        both_ids = sorted(set(stream_ids) & set(marker_ids or []))
-        if both_ids:
+        modes = _parse_streams(streams, infos)
+        channel_ids = [i for i, mode in modes.items() if mode != "annotations"]
+        annotation_ids = [i for i, mode in modes.items() if mode == "annotations"]
+        streams = xdf_streams  # the selection is now stored in `modes`
+
+        if not channel_ids:
             raise ValueError(
-                f"Stream(s) {', '.join(map(str, both_ids))} must not be listed in both "
-                "`stream_ids` and `marker_ids`."
+                "At least one stream must be loaded as channels (mode 'continuous' or "
+                "'discrete')."
             )
 
-        regular_ids = [i for i in marker_ids or [] if not is_marker_stream(infos[i])]
-        if regular_ids:
+        if len(channel_ids) > 1 and fs_new is None:
             raise ValueError(
-                f"Stream(s) {', '.join(map(str, regular_ids))} cannot be loaded as "
-                "annotations, only string streams and numeric streams with a nominal "
-                "sampling frequency of 0 Hz can (see `stream_ids`)."
+                "Argument `fs_new` is required when loading multiple streams as "
+                "channels."
             )
 
-        if fs_new is None and _stream_srate(streams[stream_ids[0]]) == 0:
+        if fs_new is None and _stream_srate(streams[channel_ids[0]]) == 0:
             raise ValueError(
-                "Argument `fs_new` is required when reading a stream with a nominal "
-                "sampling frequency of 0 Hz."
+                "Argument `fs_new` is required when loading a stream with a nominal "
+                "sampling frequency of 0 Hz as channels."
             )
 
         labels_all, types_all, units_all, discrete_all = [], [], [], []
         channel_types = get_channel_type_constants(True)
-        for stream_id in stream_ids:
+        for stream_id in channel_ids:
             stream = streams[stream_id]
 
             n_chans = int(stream["info"]["channel_count"][0])
@@ -271,7 +289,7 @@ class RawXDF(BaseRaw):
                 units = ["NA" for _ in range(n_chans)]
             if not types:
                 types = [None for _ in range(n_chans)]
-            discrete = _discrete_channels(stream, types, discrete_ids)
+            discrete = [modes[stream_id] == "discrete" or t == "stim" for t in types]
             # discrete channels of regular streams default to stim, irregular streams
             # are often sensor values (like heart rate) and keep the misc default
             regular = _stream_srate(stream) > 0
@@ -289,14 +307,14 @@ class RawXDF(BaseRaw):
 
         if fs_new is not None:
             data, first_time = _resample_streams(
-                streams, stream_ids, fs_new, use_interpolation, np.array(discrete_all)
+                streams, channel_ids, fs_new, use_interpolation, np.array(discrete_all)
             )
             fs = fs_new
 
             if gap_threshold > 0:  # mark gaps if requested
                 timestamps = first_time + np.arange(len(data)) / fs
                 col_start = 0
-                for stream_id in stream_ids:
+                for stream_id in channel_ids:
                     n_chans = int(streams[stream_id]["info"]["channel_count"][0])
                     # irregular streams have no nominal sample spacing, so no gaps
                     if _stream_srate(streams[stream_id]) > 0:
@@ -309,15 +327,15 @@ class RawXDF(BaseRaw):
                         )
                     col_start += n_chans
         else:  # only possible if a single stream was selected
-            if len(streams[stream_ids[0]]["time_stamps"]) == 0:
-                raise ValueError(f"Stream {stream_ids[0]} contains no samples.")
-            data = np.array(streams[stream_ids[0]]["time_series"], dtype=float)
-            first_time = streams[stream_ids[0]]["time_stamps"][0]
+            if len(streams[channel_ids[0]]["time_stamps"]) == 0:
+                raise ValueError(f"Stream {channel_ids[0]} contains no samples.")
+            data = np.array(streams[channel_ids[0]]["time_series"], dtype=float)
+            first_time = streams[channel_ids[0]]["time_stamps"][0]
             fs = float(
-                np.array(streams[stream_ids[0]]["info"]["effective_srate"]).item()
+                np.array(streams[channel_ids[0]]["info"]["effective_srate"]).item()
             )
             if fs == 0:  # fall back to nominal rate (e.g. when only one sample exists)
-                fs = float(streams[stream_ids[0]]["info"]["nominal_srate"][0])
+                fs = float(streams[channel_ids[0]]["info"]["nominal_srate"][0])
 
         # NaN in stim channels breaks `mne.find_events`, and 0 means "no event" anyway
         stim = np.array(types_all) == "stim"
@@ -350,12 +368,8 @@ class RawXDF(BaseRaw):
             if p is not None and p[1] is not None:
                 ch["unit"] = p[1]
 
-        # convert string streams and irregular numeric streams to annotations
-        for stream_id, stream in streams.items():
-            if stream_id in stream_ids or not is_marker_stream(infos[stream_id]):
-                continue
-            if marker_ids is not None and stream_id not in marker_ids:
-                continue
+        for stream_id in annotation_ids:
+            stream = streams[stream_id]
             prefix = f"{stream_id}-" if prefix_markers else ""
             onsets_list, descriptions_list = [], []
             for ts, sub in zip(stream["time_stamps"], stream["time_series"]):
@@ -625,13 +639,13 @@ def _count_changes(x):
 
 def read_raw_xdf(
     fname,
-    stream_ids=None,
+    streams=None,
     *,
-    marker_ids=None,
-    discrete_ids=None,
     fs_new=None,
     gap_threshold=0.0,
     prefix_markers=False,
+    stream_ids=None,
+    marker_ids=None,
     **kwargs,
 ):
     """Read XDF file.
@@ -640,21 +654,16 @@ def read_raw_xdf(
     ----------
     fname : str
         File name to load.
-    stream_ids : int | list[int] | None
-        ID(s) of streams to load as channels. If `None`, raises a `ValueError` listing
-        the available numeric stream IDs. Use `resolve_streams(fname)` to list available
-        streams. String streams cannot be loaded as channels.
-    marker_ids : list[int] | None
-        IDs of marker streams (string streams and numeric streams with a nominal
-        sampling frequency of 0 Hz) to load as annotations. If `None`, load all marker
-        streams that are not listed in `stream_ids`.
-    discrete_ids : list[int] | None
-        IDs of streams whose channels contain discrete values (such as trigger codes).
-        If `None`, discrete streams are detected from their stream type. See `RawXDF`
-        for details on how different stream types are handled.
+    streams : int | list[int] | dict[int, str] | None
+        Streams to load (all other streams are ignored). A list (or a single stream ID)
+        loads each stream in its default mode. A dict maps stream IDs to modes, which
+        can be "continuous" ("c"), "discrete" ("d"), or "annotations" ("a"). If `None`,
+        raises a `ValueError` listing the available streams and their possible modes.
+        See `RawXDF` for details on how streams are loaded.
     fs_new : float | None
-        Target sampling frequency in Hz (required when reading multiple streams). If
-        only one stream is provided, this can be `None`, in which case the stream's
+        Target sampling frequency in Hz (required when loading multiple streams as
+        channels or a stream with a nominal sampling frequency of 0 Hz). If only one
+        stream is loaded as channels, this can be `None`, in which case the stream's
         original sampling rate is used.
     gap_threshold : float
         Detect gaps in timestamps larger than this value (in seconds) and mark those
@@ -662,32 +671,138 @@ def read_raw_xdf(
         linear interpolation is used instead of resampling, and `fs_new` must be
         specified.
     prefix_markers : bool
-        Whether to prefix marker streams with their corresponding stream ID.
+        Whether to prefix annotations with the ID of their stream.
+    stream_ids : int | list[int] | None
+        Deprecated, use `streams` instead. IDs of streams to load as channels.
+    marker_ids : list[int] | None
+        Deprecated, use `streams` instead. IDs of string streams and numeric streams
+        with 0 Hz to convert to annotations (`None` converts all such streams that are
+        not listed in `stream_ids`).
 
     Returns
     -------
     RawXDF
         The raw data.
     """
-    if isinstance(stream_ids, int):
-        stream_ids = [stream_ids]
-    if stream_ids is None:
-        streams = resolve_streams(fname)
-        ids = [s["stream_id"] for s in streams if s["channel_format"] != "string"]
-        msg = (
-            "Argument `stream_ids` is required (available numeric stream IDs: "
-            f"{', '.join(map(str, ids))})."
+    if streams is None and stream_ids is None and marker_ids is None:
+        available = "\n".join(
+            f"  {s['stream_id']}: {s['name']} ({', '.join(stream_modes(s))})"
+            for s in resolve_streams(fname)
         )
-        raise ValueError(msg)
+        raise ValueError(
+            "Argument `streams` is required. Available streams (ID: name, possible "
+            f"modes with the default first):\n{available}"
+        )
     return RawXDF(
         fname,
-        stream_ids,
-        marker_ids=marker_ids,
-        discrete_ids=discrete_ids,
+        streams,
         fs_new=fs_new,
         gap_threshold=gap_threshold,
         prefix_markers=prefix_markers,
+        stream_ids=stream_ids,
+        marker_ids=marker_ids,
     )
+
+
+def stream_modes(stream):
+    """Return the modes in which a stream can be loaded.
+
+    Parameters
+    ----------
+    stream : dict
+        Stream information as returned by `resolve_streams(fname)`.
+
+    Returns
+    -------
+    list[str]
+        The possible modes ("continuous", "discrete", or "annotations"), starting with
+        the default mode that is used if the stream is passed to `streams` without a
+        mode. String streams can only be converted to annotations. Numeric streams with
+        a nominal sampling frequency of 0 Hz are converted to annotations by default,
+        but can also be loaded as discrete channels. Numeric streams with a regular
+        sampling frequency are loaded as continuous or discrete channels, depending on
+        their stream type (discrete for "Marker(s)", "Event(s)", "Trigger(s)", and
+        "Stim").
+    """
+    if stream["channel_format"] == "string":
+        return ["annotations"]
+    if float(stream["nominal_srate"]) == 0:
+        return ["annotations", "discrete"]
+    if str(stream["type"] or "").strip().lower() in _EVENT_STREAM_TYPES:
+        return ["discrete", "continuous"]
+    return ["continuous", "discrete"]
+
+
+def _parse_streams(streams, infos):
+    """Return a dict that maps each stream ID in `streams` to its mode.
+
+    Parameters
+    ----------
+    streams : int | list[int] | dict[int, str | None]
+        The `streams` argument (`None` as a mode selects the default mode).
+    infos : dict[int, dict]
+        Stream information for all streams in the file (keys are stream IDs).
+
+    Returns
+    -------
+    dict[int, str]
+        The full mode name for each stream.
+    """
+    if isinstance(streams, int):
+        streams = [streams]
+    if not isinstance(streams, dict):
+        streams = dict.fromkeys(streams)
+    unknown_ids = [i for i in streams if i not in infos]
+    if unknown_ids:
+        raise ValueError(
+            f"Stream(s) {', '.join(map(str, unknown_ids))} not found (available stream "
+            f"IDs: {', '.join(map(str, infos))})."
+        )
+    modes = {}
+    for stream_id, mode in streams.items():
+        possible = stream_modes(infos[stream_id])
+        if mode is None:
+            modes[stream_id] = possible[0]
+            continue
+        full = _MODES.get(str(mode).lower())
+        if full is None:
+            raise ValueError(
+                f"Invalid mode {mode!r} for stream {stream_id} (use 'continuous', "
+                "'discrete', 'annotations', or their abbreviations 'c', 'd', 'a')."
+            )
+        if full not in possible:
+            raise ValueError(
+                f"Stream {stream_id} cannot be loaded as {full} (possible modes: "
+                f"{', '.join(possible)})."
+            )
+        modes[stream_id] = full
+    return modes
+
+
+def _streams_from_ids(stream_ids, marker_ids, infos):
+    """Convert the deprecated `stream_ids` and `marker_ids` to `streams`."""
+    if isinstance(stream_ids, int):
+        stream_ids = [stream_ids]
+    stream_ids = list(stream_ids or [])
+    both_ids = sorted(set(stream_ids) & set(marker_ids or []))
+    if both_ids:
+        raise ValueError(
+            f"Stream(s) {', '.join(map(str, both_ids))} must not be listed in both "
+            "`stream_ids` and `marker_ids`."
+        )
+    streams = {}
+    for stream_id in stream_ids:
+        # irregular numeric streams can only be loaded as discrete channels
+        possible = stream_modes(infos[stream_id]) if stream_id in infos else [None]
+        streams[stream_id] = "discrete" if possible[0] == "annotations" else None
+    if marker_ids is None:
+        marker_ids = [
+            i
+            for i, info in infos.items()
+            if i not in stream_ids and stream_modes(info)[0] == "annotations"
+        ]
+    streams.update(dict.fromkeys(marker_ids, "annotations"))
+    return streams
 
 
 def _is_string_stream(stream):
@@ -699,6 +814,7 @@ def _stream_info(stream):
     info = stream["info"]
     return {
         "stream_id": info["stream_id"],
+        "name": (info.get("name") or [None])[0],
         "type": (info.get("type") or [None])[0],
         "channel_format": info["channel_format"][0],
         "nominal_srate": float(info["nominal_srate"][0]),
@@ -707,79 +823,6 @@ def _stream_info(stream):
 
 def _stream_srate(stream):
     return float(stream["info"]["nominal_srate"][0])
-
-
-def is_marker_stream(stream):
-    """Return whether a stream is a marker stream.
-
-    Marker streams are converted to annotations by default, and only marker streams can
-    be listed in `marker_ids`.
-
-    Parameters
-    ----------
-    stream : dict
-        Stream information as returned by `resolve_streams(fname)`.
-
-    Returns
-    -------
-    bool
-        Whether the stream is a string stream (any sampling frequency) or a numeric
-        stream with a nominal sampling frequency of 0 Hz. String streams are always
-        converted to annotations, whereas numeric streams with 0 Hz can also be loaded
-        as channels by listing them in `stream_ids`.
-    """
-    return stream["channel_format"] == "string" or float(stream["nominal_srate"]) == 0
-
-
-def is_discrete_stream(stream):
-    """Return whether a numeric stream is loaded as discrete channels by default.
-
-    Parameters
-    ----------
-    stream : dict
-        Stream information as returned by `resolve_streams(fname)`.
-
-    Returns
-    -------
-    bool
-        Whether the channels of the stream are discrete when the stream is loaded as
-        channels and `discrete_ids` is `None`. This is the case for numeric streams with
-        a nominal sampling frequency of 0 Hz and for numeric streams whose type is one
-        of "Marker(s)", "Event(s)", "Trigger(s)" or "Stim" (case-insensitive). String
-        streams cannot be loaded as channels and are never discrete. Channels with the
-        type "stim" are always discrete, but this cannot be determined from the stream
-        information.
-    """
-    if stream["channel_format"] == "string":
-        return False
-    stream_type = str(stream["type"] or "").strip().lower()
-    return float(stream["nominal_srate"]) == 0 or stream_type in _EVENT_STREAM_TYPES
-
-
-def _discrete_channels(stream, types, discrete_ids):
-    """Determine which channels of a numeric stream are discrete.
-
-    Parameters
-    ----------
-    stream : dict
-        The XDF stream.
-    types : list[str | None]
-        Channel types from the stream description (`None` if not specified).
-    discrete_ids : list[int] | None
-        IDs of discrete streams, or `None` to detect them from the stream type.
-
-    Returns
-    -------
-    list[bool]
-        Whether each channel is discrete.
-    """
-    if _stream_srate(stream) == 0:  # irregular values can only be held
-        return [True] * len(types)
-    if discrete_ids is None:
-        discrete = is_discrete_stream(_stream_info(stream))
-    else:
-        discrete = stream["info"]["stream_id"] in discrete_ids
-    return [discrete or t == "stim" for t in types]
 
 
 def get_xml(fname):
