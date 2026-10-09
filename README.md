@@ -73,16 +73,20 @@ Discrete channels of streams with a regular sampling frequency get the channel t
 ```python
 from mnextend import read_raw
 
-# EEG and triggers as channels, all marker streams (3, 4, and 5) as annotations
+# EEG and triggers as channels, marker streams as annotations
+# (1: continuous; 2: discrete; 3, 4, 5: annotations; 6: not loaded)
 raw = read_raw("my_data.xdf", stream_ids=[1, 2], fs_new=500)
 
-# only the text markers (stream 3) as annotations
+# only the text markers as annotations
+# (1: continuous; 2: discrete; 3: annotations; 4, 5, 6: not loaded)
 raw = read_raw("my_data.xdf", stream_ids=[1, 2], fs_new=500, marker_ids=[3])
 
 # heart rate as a channel instead of annotations
+# (1: continuous; 5: discrete; 3, 4: annotations; 2, 6: not loaded)
 raw = read_raw("my_data.xdf", stream_ids=[1, 5], fs_new=500)
 
-# TTL pulses as a discrete channel (stream 2 must be listed as well)
+# TTL pulses as a discrete channel (stream 2 must be listed in `discrete_ids` as well)
+# (1: continuous; 2, 6: discrete; 3, 4, 5: annotations)
 raw = read_raw("my_data.xdf", stream_ids=[1, 2, 6], fs_new=500, discrete_ids=[2, 6])
 ```
 
