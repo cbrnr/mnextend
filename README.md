@@ -101,6 +101,8 @@ for stream in resolve_streams("my_data.xdf"):
     print(stream["stream_id"], stream["name"], stream_modes(stream))
 ```
 
+Streams rarely start and end at exactly the same time, so channels contain NaN wherever their stream has no data (as well as in gaps detected with `gap_threshold`), except for "stim" channels, which contain 0 instead. Time spans in which data channels such as EEG contain NaN are annotated as "BAD_ACQ_SKIP". MNE skips these spans when filtering (where NaN would otherwise spread to neighboring samples), and functions that reject bad segments also skip them.
+
 ### Writing raw data
 
 Writing raw data is supported via `write_raw()`, which does not implement any new file formats, but provides a unified interface for writing raw data to the file formats that are natively supported by MNE-Python:

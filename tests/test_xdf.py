@@ -416,6 +416,60 @@ def test_discrete_last_value_between_samples(monkeypatch, tmp_path):
     np.testing.assert_array_equal(data[30:], [65] * 21 + [70])
 
 
+def test_nan_annotations(monkeypatch, tmp_path):
+    """Test that NaN in data channels is annotated so that filtering skips it."""
+    rng = np.random.default_rng(0)
+    eeg = _make_stream(
+        ["NA"],
+        rng.standard_normal((180, 1)),
+        types=["eeg"],
+        time_stamps=0.1 + np.arange(180) / 100,
+    )
+    trigger = _make_stream(
+        ["NA"],
+        _trigger_data(250, {100: (3, 7)}),
+        stream_id=2,
+        stream_type="Trigger",
+        types=[None],
+    )
+    # NaN in continuous misc channels (such as eye tracking) is not annotated
+    gaze = _make_stream(
+        ["NA"],
+        rng.standard_normal((50, 1)),
+        stream_id=3,
+        types=["misc"],
+        time_stamps=1.0 + np.arange(50) / 100,
+    )
+    raw = _read_streams(
+        monkeypatch, tmp_path, [eeg, trigger, gaze], [1, 2, 3], fs_new=100
+    )
+    assert list(raw.annotations.description) == ["BAD_ACQ_SKIP"] * 2
+    np.testing.assert_allclose(raw.annotations.onset, [0, 1.9])
+    np.testing.assert_allclose(raw.annotations.duration, [0.1, 0.6])
+
+    nan = np.isnan(raw.get_data(picks="eeg"))
+    filtered = raw.copy().filter(None, 20, picks="eeg")
+    np.testing.assert_array_equal(np.isnan(filtered.get_data(picks="eeg")), nan)
+
+
+def test_nan_annotations_gaps(monkeypatch, tmp_path):
+    """Test that detected gaps in data channels are annotated."""
+    time_stamps = np.arange(200) / 100
+    keep = (time_stamps < 0.8) | (time_stamps >= 1.0)  # gap from 0.8 to 1.0 s
+    eeg = _make_stream(
+        ["NA"], np.ones((keep.sum(), 1)), types=["eeg"], time_stamps=time_stamps[keep]
+    )
+    raw = _read_streams(monkeypatch, tmp_path, [eeg], [1], fs_new=100)
+    assert len(raw.annotations) == 0  # gaps are only detected if requested
+
+    raw = _read_streams(
+        monkeypatch, tmp_path, [eeg], [1], fs_new=100, gap_threshold=0.05
+    )
+    assert list(raw.annotations.description) == ["BAD_ACQ_SKIP"]
+    np.testing.assert_allclose(raw.annotations.onset, [0.8])
+    np.testing.assert_allclose(raw.annotations.duration, [0.2])
+
+
 def test_string_stream_modes(monkeypatch, tmp_path):
     """Test that string streams can only be converted to annotations."""
     eeg = _make_stream(["NA"], np.ones((200, 1)), types=["eeg"])
