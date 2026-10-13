@@ -19,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
+          python-version: "3.15"
       - name: Check license headers
         run: python .github/check_license_headers.py
       - name: Get latest uv version
@@ -43,7 +43,7 @@ jobs:
     needs: check
     strategy:
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14", "3.15"]
         os: [ubuntu-24.04, macos-15, windows-2022]
     name: Run tests (Python ${{ matrix.python-version }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
