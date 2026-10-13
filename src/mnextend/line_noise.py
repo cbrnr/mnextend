@@ -2,17 +2,22 @@
 #
 # License: BSD (3-clause)
 
-"""Adaptive subtraction of known line-noise sinusoids."""
+"""Subtraction of line-noise sinusoids with per-window frequency tracking."""
 
 import numpy as np
 from mne._fiff.pick import _picks_to_idx
+from mne.annotations import _annotations_starts_stops
 from mne.io import BaseRaw
-from mne.utils import _check_preload
+from mne.utils import _check_preload, warn
+from scipy.fft import fft, ifft, next_fast_len
+from scipy.linalg import solve_triangular
+from scipy.optimize import minimize_scalar
 
 # Keep temporary window arrays bounded for long, high-density recordings. The output
 # itself necessarily has the size of the selected data.
 _MAX_WORKING_SET_BYTES = 64 * 1024**2
-_MAX_WINDOW_BATCH_SIZE = 32
+# minimum number of block sums per window used to estimate line frequencies
+_MIN_BLOCKS = 64
 
 
 def remove_line_noise(
@@ -23,12 +28,20 @@ def remove_line_noise(
     include_harmonics=True,
     window_length=10.0,
     overlap=0.5,
+    freq_tolerance=0.1,
+    skip_by_annotation=("edge", "bad_acq_skip"),
 ):
     """Subtract fitted line-noise sinusoids from a Raw object in place.
 
-    The supplied line frequencies are fitted with sine and cosine components in
-    overlapping time windows. The fitted components are subtracted with a weighted
-    overlap-add reconstruction, allowing line amplitude and phase to vary over time.
+    The line frequencies are fitted with sine and cosine components in overlapping time
+    windows. The fitted components are subtracted with a weighted overlap-add
+    reconstruction, allowing line amplitude and phase to vary over time.
+
+    The actual frequency of the power grid deviates slightly from its nominal value and
+    drifts over time. Therefore, each fundamental frequency is estimated separately in
+    every window within `freq_tolerance` of its nominal value, and its harmonics follow
+    as multiples of the estimated frequency. The estimate maximizes the power at the
+    fundamental and its harmonics, summed over all selected channels.
 
     Parameters
     ----------
@@ -45,73 +58,76 @@ def remove_line_noise(
         If `True`, fit every positive integer harmonic below Nyquist as well as the
         supplied fundamental frequencies.
     window_length : float
-        Regression-window duration in seconds. The effective duration can differ because
-        it is rounded to samples and is limited by a shorter recording.
+        Regression-window duration in seconds. Line frequency, amplitude, and phase are
+        assumed to be constant within a window, so shorter windows follow faster
+        changes, but they also remove more signal close to the line frequencies. The
+        effective duration can differ because it is rounded to samples and is limited by
+        shorter data segments.
     overlap : float
         Fractional overlap between successive regression windows. It must be in the
         interval [0, 1).
+    freq_tolerance : float
+        Maximum deviation in Hz of each fundamental frequency from its nominal value
+        `line_freq`. The deviation is estimated separately in each window, and harmonics
+        deviate by the corresponding multiple. If `0`, only the nominal frequencies are
+        fitted.
+    skip_by_annotation : str | list of str
+        Annotations whose descriptions start with any of these strings (ignoring case)
+        mark spans that are left unchanged, and the data on either side are cleaned
+        independently. The default skips boundaries between concatenated recordings
+        (`"edge"`) and acquisition gaps (`"bad_acq_skip"`), which may contain NaN. To
+        clean the data in a single segment, use an empty list.
 
     Returns
     -------
     raw : instance of mne.io.BaseRaw
         The same instance, after modifying the selected channels in place.
+
+    Notes
+    -----
+    NaN values in a window make the cleaned data of all overlapping windows NaN, so
+    spans containing NaN should be excluded with `skip_by_annotation`. Segments between
+    skipped spans that are too short to fit all frequencies are left unchanged (with a
+    warning).
     """
     if not isinstance(raw, BaseRaw):
         raise TypeError("raw must be an instance of mne.io.BaseRaw.")
     _check_preload(raw, "remove_line_noise")
     pick_indices = _picks_to_idx(raw.info, picks, exclude=(), none="data_or_ica")
-    raw._data[pick_indices] = _remove_line_noise(
-        raw._data,
-        pick_indices,
-        raw.info["sfreq"],
-        line_freq,
-        include_harmonics=include_harmonics,
-        window_length=window_length,
-        overlap=overlap,
-    )
-    return raw
-
-
-def _remove_line_noise(
-    data,
-    pick_indices,
-    sfreq,
-    line_freq,
-    *,
-    include_harmonics,
-    window_length,
-    overlap,
-):
-    """Return cleaned data for the public in-place Raw wrapper."""
-    sfreq = _validate_real_scalar(sfreq, "sfreq", positive=True)
-    frequencies = _prepare_frequencies(line_freq, sfreq, include_harmonics)
-    window_length = _validate_real_scalar(window_length, "window_length", positive=True)
-    window_samples = min(int(np.rint(window_length * sfreq)), data.shape[1])
-    if window_samples < 2:
-        raise ValueError(
-            "window_length and sfreq must yield at least two samples per window."
-        )
-
-    overlap = _validate_real_scalar(overlap, "overlap")
-    if not 0 <= overlap < 1:
-        raise ValueError("overlap must be greater than or equal to 0 and less than 1.")
-    hop = int(np.rint(window_samples * (1 - overlap)))
-    if hop < 1:
-        raise ValueError("overlap leaves fewer than one sample between window starts.")
-
-    basis = _make_basis(window_samples, sfreq, frequencies)
-    q_factor, r_factor = np.linalg.qr(basis, mode="reduced")
-    if np.linalg.matrix_rank(r_factor) != basis.shape[1]:
+    sfreq = _validate_real_scalar(raw.info["sfreq"], "sfreq", positive=True)
+    families = _prepare_families(line_freq, sfreq, include_harmonics)
+    window_samples, overlap = _prepare_windows(window_length, overlap, sfreq)
+    freq_tolerance = _prepare_tolerance(freq_tolerance, families)
+    if _orthonormal_basis(window_samples, sfreq, _frequencies(families)) is None:
         raise ValueError(
             "The requested frequencies are not independently estimable with this "
             "window_length and sfreq."
         )
 
-    window = np.hanning(window_samples + 2)[1:-1]
-    starts = _window_starts(data.shape[1], window_samples, hop)
-    return _remove_windows(
-        data, pick_indices, basis, q_factor, r_factor, starts, window
-    )
+    onsets, ends = _annotations_starts_stops(raw, skip_by_annotation, invert=True)
+    skipped = []
+    for onset, end in zip(onsets, ends):
+        if end == onset:
+            continue
+        clean = _clean_segment(
+            raw._data[:, onset:end],
+            pick_indices,
+            sfreq,
+            families,
+            window_samples=window_samples,
+            overlap=overlap,
+            freq_tolerance=freq_tolerance,
+        )
+        if clean is None:
+            skipped.append(end - onset)
+        else:
+            raw._data[pick_indices, onset:end] = clean
+    if skipped:
+        warn(
+            f"Left {len(skipped)} data segment(s) unchanged ({sum(skipped)} samples in "
+            "total), because they are too short to fit the requested frequencies."
+        )
+    return raw
 
 
 def _validate_real_scalar(value, name, *, positive=False):
@@ -127,8 +143,12 @@ def _validate_real_scalar(value, name, *, positive=False):
     return result
 
 
-def _prepare_frequencies(line_freq, sfreq, include_harmonics):
-    """Validate fundamental frequencies and expand their valid harmonics."""
+def _prepare_families(line_freq, sfreq, include_harmonics):
+    """Validate fundamental frequencies and return them with their harmonic numbers.
+
+    Each frequency belongs to the lowest fundamental that generates it, so harmonics
+    shared by several fundamentals are fitted only once.
+    """
     if not isinstance(include_harmonics, (bool, np.bool_)):
         raise TypeError("include_harmonics must be a boolean.")
 
@@ -147,19 +167,51 @@ def _prepare_frequencies(line_freq, sfreq, include_harmonics):
     if np.any(fundamentals <= 0) or np.any(fundamentals >= nyquist):
         raise ValueError("line_freq values must be greater than 0 and below Nyquist.")
 
-    frequencies = np.unique(fundamentals)
-    if include_harmonics:
-        max_frequency = np.nextafter(nyquist, 0.0)
-        frequencies = np.unique(
-            np.concatenate(
-                [
-                    fundamental
-                    * np.arange(1, int(np.floor(max_frequency / fundamental)) + 1)
-                    for fundamental in frequencies
-                ]
-            )
+    families = []
+    assigned = set()
+    max_frequency = np.nextafter(nyquist, 0.0)
+    for fundamental in np.unique(fundamentals):
+        n_harmonics = int(np.floor(max_frequency / fundamental))
+        multipliers = np.arange(1, n_harmonics + 1 if include_harmonics else 2)
+        multipliers = multipliers[~np.isin(fundamental * multipliers, list(assigned))]
+        if multipliers.size:
+            assigned.update(fundamental * multipliers)
+            families.append((fundamental, multipliers))
+    return families
+
+
+def _frequencies(families):
+    """Return the nominal frequencies of all families in fitting order."""
+    return np.concatenate(
+        [fundamental * multipliers for fundamental, multipliers in families]
+    )
+
+
+def _prepare_windows(window_length, overlap, sfreq):
+    """Validate window parameters and return the window length in samples."""
+    window_length = _validate_real_scalar(window_length, "window_length", positive=True)
+    window_samples = int(np.rint(window_length * sfreq))
+    if window_samples < 2:
+        raise ValueError(
+            "window_length and sfreq must yield at least two samples per window."
         )
-    return frequencies
+
+    overlap = _validate_real_scalar(overlap, "overlap")
+    if not 0 <= overlap < 1:
+        raise ValueError("overlap must be greater than or equal to 0 and less than 1.")
+    if int(np.rint(window_samples * (1 - overlap))) < 1:
+        raise ValueError("overlap leaves fewer than one sample between window starts.")
+    return window_samples, overlap
+
+
+def _prepare_tolerance(freq_tolerance, families):
+    """Validate the frequency tolerance against the lowest fundamental frequency."""
+    freq_tolerance = _validate_real_scalar(freq_tolerance, "freq_tolerance")
+    if freq_tolerance < 0:
+        raise ValueError("freq_tolerance must be greater than or equal to 0.")
+    if freq_tolerance >= families[0][0]:
+        raise ValueError("freq_tolerance must be less than the lowest line_freq.")
+    return freq_tolerance
 
 
 def _make_basis(window_samples, sfreq, frequencies):
@@ -167,6 +219,25 @@ def _make_basis(window_samples, sfreq, frequencies):
     times = np.arange(window_samples, dtype=float) / sfreq
     angles = 2 * np.pi * times[:, np.newaxis] * frequencies
     return np.concatenate((np.sin(angles), np.cos(angles)), axis=1)
+
+
+def _orthonormal_basis(window_samples, sfreq, frequencies):
+    """Return an orthonormal basis of the sinusoids, or `None` if it is degenerate."""
+    basis = _make_basis(window_samples, sfreq, frequencies)
+    # Cholesky QR applied twice is much faster than Householder QR for these tall
+    # matrices, and it is just as accurate if the basis is well-conditioned
+    try:
+        lower = np.linalg.cholesky(basis.T @ basis)
+    except np.linalg.LinAlgError:
+        lower = None
+    if lower is None or np.linalg.cond(lower) > 1e4:
+        q_factor, r_factor = np.linalg.qr(basis, mode="reduced")
+        if np.linalg.matrix_rank(r_factor) != basis.shape[1]:
+            return None
+        return q_factor
+    q_factor = solve_triangular(lower, basis.T, lower=True, check_finite=False).T
+    lower = np.linalg.cholesky(q_factor.T @ q_factor)
+    return solve_triangular(lower, q_factor.T, lower=True, check_finite=False).T
 
 
 def _window_starts(n_times, window_samples, hop):
@@ -181,48 +252,154 @@ def _window_starts(n_times, window_samples, hop):
     return starts
 
 
-def _remove_windows(data, pick_indices, basis, q_factor, r_factor, starts, window):
-    """Fit all channels in bounded window/channel batches using a cached QR basis."""
-    n_channels = len(pick_indices)
+def _clean_segment(
+    data, pick_indices, sfreq, families, *, window_samples, overlap, freq_tolerance
+):
+    """Return the cleaned picks of one contiguous segment, or `None` if it is short."""
     n_times = data.shape[1]
-    window_samples, n_parameters = basis.shape
-    clean = np.zeros((n_channels, n_times), dtype=data.dtype)
+    window_samples = min(window_samples, n_times)
+    if window_samples < 2:
+        return None
+    nominal_q = _orthonormal_basis(window_samples, sfreq, _frequencies(families))
+    if nominal_q is None:
+        return None
+
+    hop = max(1, int(np.rint(window_samples * (1 - overlap))))
+    starts = _window_starts(n_times, window_samples, hop)
+    window = np.hanning(window_samples + 2)[1:-1]
     weights = np.zeros(n_times)
     for start in starts:
-        stop = min(start + window_samples, n_times)
-        weights[start:stop] += window[: stop - start]
+        weights[start : start + window_samples] += window
 
-    # Four arrays of this size are live at once: data, coefficients, fitted data, and
-    # residuals. Split first by windows and then by channels when this estimate is big.
-    window_batch_size = min(_MAX_WINDOW_BATCH_SIZE, len(starts))
-    channel_batch_size = max(
-        1,
-        _MAX_WORKING_SET_BYTES
-        // (4 * window_batch_size * window_samples * data.dtype.itemsize),
+    # three arrays of this size are live at once: data, fitted data, and residuals
+    batch_size = max(
+        1, _MAX_WORKING_SET_BYTES // (3 * window_samples * data.dtype.itemsize)
     )
-    sample_offsets = np.arange(window_samples)
+    batches = [
+        pick_indices[first : first + batch_size]
+        for first in range(0, len(pick_indices), batch_size)
+    ]
+    tracker = None
+    if freq_tolerance > 0:
+        tracker = _FrequencyTracker(window_samples, sfreq, families, freq_tolerance)
 
-    for first_window in range(0, len(starts), window_batch_size):
-        batch_starts = starts[first_window : first_window + window_batch_size]
-        sample_indices = batch_starts[:, np.newaxis] + sample_offsets
-        for first_channel in range(0, n_channels, channel_batch_size):
-            last_channel = min(first_channel + channel_batch_size, n_channels)
-            channel_indices = pick_indices[first_channel:last_channel]
-            segments = data[
-                channel_indices[:, np.newaxis, np.newaxis],
-                sample_indices[np.newaxis, :, :],
-            ]
-            projection = segments @ q_factor
-            coefficients = np.linalg.solve(
-                r_factor.T, projection.reshape(-1, n_parameters).T
-            ).T.reshape(projection.shape)
-            residuals = segments - coefficients @ basis.T
-
-            for window_index, start in enumerate(batch_starts):
-                stop = min(start + window_samples, n_times)
-                width = stop - start
-                clean[first_channel:last_channel, start:stop] += (
-                    residuals[:, window_index, :width] * window[:width]
-                )
-
+    clean = np.zeros((len(pick_indices), n_times), dtype=data.dtype)
+    for start in starts:
+        stop = start + window_samples
+        q_factor = nominal_q
+        if tracker is not None:
+            frequencies = tracker.estimate(
+                data[channels, start:stop] for channels in batches
+            )
+            q_factor = _orthonormal_basis(window_samples, sfreq, frequencies)
+            if q_factor is None:
+                q_factor = nominal_q
+        first = 0
+        for channels in batches:
+            segments = data[channels, start:stop]
+            residuals = segments - (segments @ q_factor) @ q_factor.T
+            clean[first : first + len(channels), start:stop] += residuals * window
+            first += len(channels)
     return clean / weights
+
+
+class _FrequencyTracker:
+    """Estimate the line frequencies in windows of a fixed length.
+
+    For each family of harmonics `k * f0`, the deviation `delta` maximizes the power at
+    `k * (f0 + delta)` summed over the harmonics and channels. To evaluate this power
+    cheaply for many values of `delta`, the data are demodulated at each nominal
+    frequency and summed in blocks that are short enough that `k * delta` cannot rotate
+    the phase much within a block. The power is then a trigonometric polynomial in
+    `delta` whose coefficients are the autocorrelations of the Hann-tapered block sums.
+    It is evaluated on a grid fine enough to sample the main lobe of the highest
+    harmonic, and the best grid point is refined with a bounded scalar optimization.
+    """
+
+    def __init__(self, window_samples, sfreq, families, tolerance):
+        self.sfreq = sfreq
+        self.tolerance = tolerance
+        frequencies = _frequencies(families)
+        max_multiplier = max(multipliers[-1] for _, multipliers in families)
+
+        # keep the block rate at least eight times above the largest frequency offset,
+        # and use enough blocks that the taper suppresses leakage from other components
+        block = int(sfreq // (8 * max_multiplier * tolerance))
+        self.block = max(1, min(block, window_samples // _MIN_BLOCKS))
+        self.n_blocks = window_samples // self.block
+        angles = 2 * np.pi * np.arange(self.block)[:, np.newaxis] * frequencies / sfreq
+        self.demodulator = np.concatenate((np.cos(angles), np.sin(angles)), axis=1)
+        block_times = np.arange(self.n_blocks) * self.block / sfreq
+        taper = np.hanning(self.n_blocks + 2)[1:-1, np.newaxis]
+        self.block_phases = taper * np.exp(
+            -2j * np.pi * block_times[:, None] * frequencies
+        )
+        self.n_fft = next_fast_len(2 * self.n_blocks - 1)
+
+        self.families = []
+        lags = np.arange(1, self.n_blocks)
+        first = 0
+        for fundamental, multipliers in families:
+            columns = slice(first, first + multipliers.size)
+            first += multipliers.size
+            # the grid spacing is a quarter of the main lobe width of the highest
+            # harmonic, (sfreq / block) / n_grid = sfreq / (4 * n_blocks * block * k)
+            n_grid = 4 * self.n_blocks * multipliers[-1]
+            self.families.append(
+                (fundamental, multipliers, columns, lags[:, None] * multipliers, n_grid)
+            )
+
+    def estimate(self, segments):
+        """Return the estimated frequencies for one window of all picked channels."""
+        n_frequencies = self.demodulator.shape[1] // 2
+        power = np.zeros((self.n_fft, n_frequencies))
+        used = self.n_blocks * self.block
+        for segment in segments:
+            blocks = segment[:, :used].reshape(len(segment), self.n_blocks, self.block)
+            sums = blocks @ self.demodulator
+            sums = (sums[..., :n_frequencies] - 1j * sums[..., n_frequencies:]) * (
+                self.block_phases
+            )
+            power += np.sum(np.abs(fft(sums, n=self.n_fft, axis=1)) ** 2, axis=0)
+        autocorrelation = ifft(power, axis=0)[: self.n_blocks]
+
+        frequencies = np.empty(n_frequencies)
+        for fundamental, multipliers, columns, lag_multiples, n_grid in self.families:
+            delta = self._estimate_deviation(
+                autocorrelation[:, columns], lag_multiples, n_grid
+            )
+            frequencies[columns] = multipliers * (fundamental + delta)
+        return frequencies
+
+    def _estimate_deviation(self, autocorrelation, lag_multiples, n_grid):
+        """Return the deviation that maximizes the power of one family."""
+        zero_lag = np.sum(autocorrelation[0].real)
+        if not np.isfinite(zero_lag) or zero_lag <= 0:
+            return 0.0
+        coefficients = autocorrelation[1:]
+        # rotation per block of harmonic k for a deviation of delta is k * delta * scale
+        scale = 2 * np.pi * self.block / self.sfreq
+
+        def power(delta):
+            phases = np.exp(-1j * scale * delta * lag_multiples)
+            return zero_lag + 2 * np.sum((coefficients * phases).real)
+
+        # evaluate the power at the grid deviations j * step with a single FFT
+        polynomial = np.zeros(n_grid, dtype=complex)
+        np.add.at(polynomial, lag_multiples, coefficients)
+        grid_power = 2 * fft(polynomial).real + zero_lag
+        step = 2 * np.pi / (n_grid * scale)
+        n_side = int(self.tolerance // step)
+        grid = np.arange(-n_side, n_side + 1)
+        best = grid[np.argmax(grid_power[grid % n_grid])] * step
+
+        result = minimize_scalar(
+            lambda delta: -power(delta),
+            bounds=(
+                max(-self.tolerance, best - step),
+                min(self.tolerance, best + step),
+            ),
+            method="bounded",
+            options={"xatol": 1e-4 * step},
+        )
+        return result.x

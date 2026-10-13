@@ -2,10 +2,13 @@
 ### ✨ Added
 - Add `streams` parameter to `read_raw_xdf()`, which selects the XDF streams to load (all streams containing samples by default) and the mode for each stream (`"continuous"`, `"discrete"`, or `"annotations"`), and `stream_modes()` (via `mnextend.io.xdf`) to list the possible modes of a stream ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 - Annotate time spans in which XDF data channels contain NaN (for example, because another stream ends a few samples later) as "BAD_ACQ_SKIP" ([#18](https://github.com/cbrnr/mnextend/pull/18) by [Clemens Brunner](https://github.com/cbrnr))
+- Track deviations of the line frequency from its nominal value in `remove_line_noise()` with the new `freq_tolerance` parameter (±0.1 Hz by default) ([#19](https://github.com/cbrnr/mnextend/pull/19) by [Clemens Brunner](https://github.com/cbrnr))
+- Add `skip_by_annotation` parameter to `remove_line_noise()`, which cleans data segments separated by annotated spans independently and leaves these spans unchanged ([#19](https://github.com/cbrnr/mnextend/pull/19) by [Clemens Brunner](https://github.com/cbrnr))
 
 ### 🔧 Fixed
 - Fix resampling of XDF trigger streams, which are now loaded as discrete stim channels (resampled without filtering by holding the previous value) instead of being filtered like signals ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
 - Fix resampling of XDF streams dropping the last sample, which also lost the last value of irregular streams loaded as discrete channels (the resampled data can therefore be one sample longer than before) ([#17](https://github.com/cbrnr/mnextend/pull/17) by [Clemens Brunner](https://github.com/cbrnr))
+- Fix `remove_line_noise()` subtracting incorrect fits when the window or recording does not contain a whole number of cycles of every line frequency ([#19](https://github.com/cbrnr/mnextend/pull/19) by [Clemens Brunner](https://github.com/cbrnr))
 
 ### 🌀 Changed
 - Deprecate `stream_ids` and `marker_ids` in `read_raw_xdf()` in favor of `streams` (they will be removed in MNEXTEND 0.6.0) ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))

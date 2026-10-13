@@ -162,13 +162,13 @@ class RawXDF(BaseRaw):
             If `None`, all streams containing samples are loaded in their default modes.
             At least one stream must be loaded as channels (continuous or discrete).
             Channels are ordered by stream ID (regardless of the order in `streams`).
-            Use `resolve_streams(fname)` to list available streams and
-            `stream_modes()` to get the possible modes of a stream (see Notes).
+            Use `resolve_streams(fname)` to list available streams and `stream_modes()`
+            to get the possible modes of a stream (see Notes).
         fs_new : float | None
             Target sampling frequency in Hz (required when loading multiple streams as
-            channels or a stream with a nominal sampling frequency of 0 Hz). If only
-            one stream is loaded as channels, this can be `None`, in which case the
-            stream's original sampling rate is used.
+            channels or a stream with a nominal sampling frequency of 0 Hz). If only one
+            stream is loaded as channels, this can be `None`, in which case the stream's
+            original sampling rate is used.
         gap_threshold : float
             Detect gaps in timestamps larger than this value (in seconds) and mark those
             samples as NaN. Set to 0.0 to disable gap detection. If `gap_threshold > 0`,
@@ -179,21 +179,21 @@ class RawXDF(BaseRaw):
         stream_ids : int | list[int] | None
             Deprecated, use `streams` instead. IDs of streams to load as channels.
         marker_ids : list[int] | None
-            Deprecated, use `streams` instead. IDs of string streams and numeric
-            streams with 0 Hz to convert to annotations (`None` converts all such
-            streams that are not listed in `stream_ids`).
+            Deprecated, use `streams` instead. IDs of string streams and numeric streams
+            with 0 Hz to convert to annotations (`None` converts all such streams that
+            are not listed in `stream_ids`).
 
         Notes
         -----
         Each stream is loaded in one of the following modes:
         - "continuous": channels containing signals (such as EEG), which are filtered
           and resampled as usual.
-        - "discrete": channels containing discrete values (such as trigger codes),
-          which are never filtered and are resampled by holding the previous value, so
-          that they only contain values from the original data. A `RuntimeWarning` is
-          issued if value changes are lost due to downsampling. Discrete channels of
-          streams with a regular sampling frequency get the channel type "stim" unless
-          the stream specifies a valid type.
+        - "discrete": channels containing discrete values (such as trigger codes), which
+          are never filtered and are resampled by holding the previous value, so that
+          they only contain values from the original data. A `RuntimeWarning` is issued
+          if value changes are lost due to downsampling. Discrete channels of streams
+          with a regular sampling frequency get the channel type "stim" unless the
+          stream specifies a valid type.
         - "annotations": one annotation per non-empty string (string streams) or per
           sample (numeric streams, the value is the description).
 
@@ -201,8 +201,8 @@ class RawXDF(BaseRaw):
         - String streams: "annotations".
         - Numeric streams with a nominal sampling frequency of 0 Hz: "annotations",
           "discrete".
-        - Numeric streams with a regular sampling frequency: "discrete", "continuous"
-          if the stream type is one of "Marker(s)", "Event(s)", "Trigger(s)", or "Stim"
+        - Numeric streams with a regular sampling frequency: "discrete", "continuous" if
+          the stream type is one of "Marker(s)", "Event(s)", "Trigger(s)", or "Stim"
           (case-insensitive), otherwise "continuous", "discrete".
 
         Channels with the type "stim" are always discrete, even in continuous streams.
@@ -452,9 +452,9 @@ def _parse_unit(unit):
     -------
     tuple[float, int | None] | None | object
         `(scale, fiff_unit)` for a recognized unit, where `scale` converts to SI and
-        `fiff_unit` is the MNE unit code (or `None` if MNE has no matching unit).
-        `None` if the channel has no unit (`None`, empty or `"NA"`), and the
-        `_UNKNOWN_UNIT` sentinel if the unit is not recognized.
+        `fiff_unit` is the MNE unit code (or `None` if MNE has no matching unit). `None`
+        if the channel has no unit (`None`, empty or `"NA"`), and the `_UNKNOWN_UNIT`
+        sentinel if the unit is not recognized.
     """
     if unit is None:
         return None
