@@ -266,8 +266,8 @@ def _get_psd(ica_act, sfreq):
 
     Notes
     -----
-    Adapted from `mne-icalabel` (`_eeg_rpsd_constants`, `_eeg_rpsd_compute_psdmed`,
-    and `_eeg_rpsd_format`).
+    Adapted from `mne-icalabel` (`_eeg_rpsd_constants`, `_eeg_rpsd_compute_psdmed`, and
+    `_eeg_rpsd_format`).
     """
     if ica_act.ndim == 2:
         ica_act = ica_act[:, :, np.newaxis]
@@ -670,8 +670,8 @@ def run_iclabel(inst, ica):
     Returns
     -------
     np.ndarray, shape (n_components, 7)
-        Estimated probabilities for each component class. Columns correspond to:
-        brain, muscle, eye, heart, line noise, channel noise, other.
+        Estimated probabilities for each component class. Columns correspond to: brain,
+        muscle, eye, heart, line noise, channel noise, other.
     """
     onnx_path = Path(__file__).parent / "ICLabelNet.onnx"
     if not onnx_path.exists():
@@ -698,8 +698,8 @@ def plot_ica_components(inst, ica, probs, picks=None, show=True, **kwargs):
     ica : ICA
         The fitted ICA instance.
     probs : np.ndarray, shape (n_components, 7)
-        ICLabel class probabilities as returned by `run_iclabel`. Columns correspond
-        to: brain, muscle, eye, heart, line noise, channel noise, other.
+        ICLabel class probabilities as returned by `run_iclabel`. Columns correspond to:
+        brain, muscle, eye, heart, line noise, channel noise, other.
     picks : int | list of int | None
         Indices of components to plot. If `None`, all components are plotted.
     show : bool
