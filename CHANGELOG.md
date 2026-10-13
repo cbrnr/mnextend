@@ -4,6 +4,7 @@
 - Annotate time spans in which XDF data channels contain NaN (for example, because another stream ends a few samples later) as "BAD_ACQ_SKIP" ([#18](https://github.com/cbrnr/mnextend/pull/18) by [Clemens Brunner](https://github.com/cbrnr))
 - Track deviations of the line frequency from its nominal value in `remove_line_noise()` with the new `freq_tolerance` parameter (±0.1 Hz by default) ([#19](https://github.com/cbrnr/mnextend/pull/19) by [Clemens Brunner](https://github.com/cbrnr))
 - Add `skip_by_annotation` parameter to `remove_line_noise()`, which cleans data segments separated by annotated spans independently and leaves these spans unchanged ([#19](https://github.com/cbrnr/mnextend/pull/19) by [Clemens Brunner](https://github.com/cbrnr))
+- Add support for Python 3.15 ([#20](https://github.com/cbrnr/mnextend/pull/20) by [Clemens Brunner](https://github.com/cbrnr))
 
 ### 🔧 Fixed
 - Fix resampling of XDF trigger streams, which are now loaded as discrete stim channels (resampled without filtering by holding the previous value) instead of being filtered like signals ([#15](https://github.com/cbrnr/mnextend/pull/15) by [Clemens Brunner](https://github.com/cbrnr))
