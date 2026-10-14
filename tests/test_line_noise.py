@@ -258,12 +258,14 @@ def test_zero_tolerance_fits_nominal_frequencies():
     basis = np.column_stack(
         (np.sin(2 * np.pi * 50 * times), np.cos(2 * np.pi * 50 * times))
     )
-    coefficients, *_ = np.linalg.lstsq(basis, data[0], rcond=None)
+    # the offset is fitted jointly with the sinusoids, but it is not subtracted
+    design = np.column_stack((basis, np.ones_like(times)))
+    coefficients, *_ = np.linalg.lstsq(design, data[0], rcond=None)
 
     # the recording is shorter than one window, so a single fit is subtracted
     remove_line_noise(raw, 50, include_harmonics=False, freq_tolerance=0)
 
-    np.testing.assert_allclose(raw.get_data()[0], data[0] - basis @ coefficients)
+    np.testing.assert_allclose(raw.get_data()[0], data[0] - basis @ coefficients[:2])
 
 
 @pytest.mark.parametrize("window_length", [10, 4])
@@ -295,6 +297,24 @@ def test_tracking_matches_fit_at_true_frequency_with_nearby_signals():
     np.testing.assert_allclose(tracked.get_data(), oracle.get_data(), atol=1e-3)
     np.testing.assert_allclose(
         _sinusoid_amplitude(tracked.get_data(), sfreq, 48), 0.5, rtol=1e-3
+    )
+
+
+@pytest.mark.parametrize("sfreq", [500.0, 512.0])
+def test_large_offset_does_not_affect_tracking(sfreq):
+    times = np.arange(int(60 * sfreq)) / sfreq
+    line = _line(2 * np.pi * 50.04 * times)
+    # offsets of unreferenced EEG can be thousands of times larger than line noise
+    offset = np.array([[5e3], [-2e3], [8e3]])
+    without_offset = _raw(line, sfreq)
+    with_offset = _raw(line + offset, sfreq)
+
+    remove_line_noise(without_offset, 50)
+    remove_line_noise(with_offset, 50)
+
+    assert _attenuation(line, with_offset.get_data() - offset) > 90
+    np.testing.assert_allclose(
+        with_offset.get_data() - offset, without_offset.get_data(), atol=1e-6
     )
 
 

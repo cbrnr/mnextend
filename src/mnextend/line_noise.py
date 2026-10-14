@@ -35,7 +35,10 @@ def remove_line_noise(
 
     The line frequencies are fitted with sine and cosine components in overlapping time
     windows. The fitted components are subtracted with a weighted overlap-add
-    reconstruction, allowing line amplitude and phase to vary over time.
+    reconstruction, allowing line amplitude and phase to vary over time. A constant
+    offset is fitted jointly in each window (but not subtracted), so that large offsets
+    (for example, in unreferenced or unfiltered data) do not distort the fitted line
+    noise.
 
     The actual frequency of the power grid deviates slightly from its nominal value and
     drifts over time. Therefore, each fundamental frequency is estimated separately in
@@ -98,7 +101,7 @@ def remove_line_noise(
     families = _prepare_families(line_freq, sfreq, include_harmonics)
     window_samples, overlap = _prepare_windows(window_length, overlap, sfreq)
     freq_tolerance = _prepare_tolerance(freq_tolerance, families)
-    if _orthonormal_basis(window_samples, sfreq, _frequencies(families)) is None:
+    if _line_basis(window_samples, sfreq, _frequencies(families)) is None:
         raise ValueError(
             "The requested frequencies are not independently estimable with this "
             "window_length and sfreq."
@@ -221,23 +224,34 @@ def _make_basis(window_samples, sfreq, frequencies):
     return np.concatenate((np.sin(angles), np.cos(angles)), axis=1)
 
 
-def _orthonormal_basis(window_samples, sfreq, frequencies):
-    """Return an orthonormal basis of the sinusoids, or `None` if it is degenerate."""
+def _line_basis(window_samples, sfreq, frequencies):
+    """Return matrices to fit the sinusoids jointly with an offset, or `None`.
+
+    The sinusoids are demeaned and then orthonormalized, which yields `q_factor`. For
+    data `y`, the least-squares fit of the sinusoids in the joint model is
+    `(y @ q_factor) @ sinusoids.T`, so the offset is fitted but not returned. `None`
+    indicates that the sinusoids are not independently estimable.
+    """
     basis = _make_basis(window_samples, sfreq, frequencies)
+    demeaned = basis - basis.mean(axis=0)
     # Cholesky QR applied twice is much faster than Householder QR for these tall
     # matrices, and it is just as accurate if the basis is well-conditioned
     try:
-        lower = np.linalg.cholesky(basis.T @ basis)
+        lower = np.linalg.cholesky(demeaned.T @ demeaned)
     except np.linalg.LinAlgError:
         lower = None
     if lower is None or np.linalg.cond(lower) > 1e4:
-        q_factor, r_factor = np.linalg.qr(basis, mode="reduced")
+        q_factor, r_factor = np.linalg.qr(demeaned, mode="reduced")
         if np.linalg.matrix_rank(r_factor) != basis.shape[1]:
             return None
-        return q_factor
-    q_factor = solve_triangular(lower, basis.T, lower=True, check_finite=False).T
-    lower = np.linalg.cholesky(q_factor.T @ q_factor)
-    return solve_triangular(lower, q_factor.T, lower=True, check_finite=False).T
+    else:
+        q_factor = solve_triangular(lower, demeaned.T, lower=True, check_finite=False)
+        lower = np.linalg.cholesky(q_factor @ q_factor.T)
+        q_factor = solve_triangular(lower, q_factor, lower=True, check_finite=False).T
+    # demeaned = q_factor @ r with triangular r = q_factor.T @ basis, so coefficients c
+    # of q_factor correspond to coefficients inv(r) @ c of the sinusoids
+    sinusoids = np.linalg.solve(basis.T @ q_factor, basis.T).T
+    return q_factor, sinusoids
 
 
 def _window_starts(n_times, window_samples, hop):
@@ -260,8 +274,8 @@ def _clean_segment(
     window_samples = min(window_samples, n_times)
     if window_samples < 2:
         return None
-    nominal_q = _orthonormal_basis(window_samples, sfreq, _frequencies(families))
-    if nominal_q is None:
+    nominal = _line_basis(window_samples, sfreq, _frequencies(families))
+    if nominal is None:
         return None
 
     hop = max(1, int(np.rint(window_samples * (1 - overlap))))
@@ -286,18 +300,18 @@ def _clean_segment(
     clean = np.zeros((len(pick_indices), n_times), dtype=data.dtype)
     for start in starts:
         stop = start + window_samples
-        q_factor = nominal_q
+        q_factor, sinusoids = nominal
         if tracker is not None:
             frequencies = tracker.estimate(
                 data[channels, start:stop] for channels in batches
             )
-            q_factor = _orthonormal_basis(window_samples, sfreq, frequencies)
-            if q_factor is None:
-                q_factor = nominal_q
+            q_factor, sinusoids = (
+                _line_basis(window_samples, sfreq, frequencies) or nominal
+            )
         first = 0
         for channels in batches:
             segments = data[channels, start:stop]
-            residuals = segments - (segments @ q_factor) @ q_factor.T
+            residuals = segments - (segments @ q_factor) @ sinusoids.T
             clean[first : first + len(channels), start:stop] += residuals * window
             first += len(channels)
     return clean / weights
@@ -310,10 +324,12 @@ class _FrequencyTracker:
     `k * (f0 + delta)` summed over the harmonics and channels. To evaluate this power
     cheaply for many values of `delta`, the data are demodulated at each nominal
     frequency and summed in blocks that are short enough that `k * delta` cannot rotate
-    the phase much within a block. The power is then a trigonometric polynomial in
-    `delta` whose coefficients are the autocorrelations of the Hann-tapered block sums.
-    It is evaluated on a grid fine enough to sample the main lobe of the highest
-    harmonic, and the best grid point is refined with a bounded scalar optimization.
+    the phase much within a block. Each window is demeaned first, because the block sums
+    do not suppress large offsets enough to prevent them from aliasing close to the line
+    frequencies. The power is then a trigonometric polynomial in `delta` whose
+    coefficients are the autocorrelations of the Hann-tapered block sums. It is
+    evaluated on a grid fine enough to sample the main lobe of the highest harmonic, and
+    the best grid point is refined with a bounded scalar optimization.
     """
 
     def __init__(self, window_samples, sfreq, families, tolerance):
@@ -355,6 +371,7 @@ class _FrequencyTracker:
         power = np.zeros((self.n_fft, n_frequencies))
         used = self.n_blocks * self.block
         for segment in segments:
+            segment = segment - segment.mean(axis=1, keepdims=True)
             blocks = segment[:, :used].reshape(len(segment), self.n_blocks, self.block)
             sums = blocks @ self.demodulator
             sums = (sums[..., :n_frequencies] - 1j * sums[..., n_frequencies:]) * (
