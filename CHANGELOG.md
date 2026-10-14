@@ -1,3 +1,5 @@
+## [UNRELEASED] · YYYY-MM-DD
+
 ## [0.5.1] · 2026-10-14
 ### 🔧 Fixed
 - Fix `remove_line_noise()` in data with large offsets ([#21](https://github.com/cbrnr/mnextend/pull/21) by [Clemens Brunner](https://github.com/cbrnr))
